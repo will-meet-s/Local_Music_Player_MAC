@@ -19,17 +19,32 @@ struct TrackListView: View {
         if vm.tracks.isEmpty {
             EmptyLibraryView()
         } else {
-            List(selection: $selection) {
-                ForEach(Array(vm.tracks.enumerated()), id: \.element.id) { index, track in
-                    TrackRow(track: track, isCurrent: index == vm.currentIndex, isPlaying: vm.isPlaying)
-                        .tag(track.id)
-                        .contentShape(Rectangle())
-                        .onTapGesture(count: 2) {
-                            vm.play(at: index)
-                        }
+            ScrollViewReader { proxy in
+                List(selection: $selection) {
+                    ForEach(Array(vm.tracks.enumerated()), id: \.element.id) { index, track in
+                        TrackRow(track: track, isCurrent: index == vm.currentIndex, isPlaying: vm.isPlaying)
+                            .tag(track.id)
+                            .contentShape(Rectangle())
+                            .onTapGesture(count: 2) {
+                                vm.play(at: index)
+                            }
+                    }
                 }
+                .listStyle(.inset)
+                // List 在内容变化时会保留原来的滚动偏移，搜索或改排序之后
+                // 看到的是列表中段，必须手动回顶。
+                .onChange(of: vm.searchText) { _, _ in scrollToTop(proxy) }
+                .onChange(of: vm.sortOrder) { _, _ in scrollToTop(proxy) }
+                .onChange(of: vm.sortAscending) { _, _ in scrollToTop(proxy) }
             }
-            .listStyle(.inset)
+        }
+    }
+
+    /// 新的行还没完成布局就 scrollTo 会没反应，所以放到下一个 runloop。
+    private func scrollToTop(_ proxy: ScrollViewProxy) {
+        guard let first = vm.tracks.first else { return }
+        DispatchQueue.main.async {
+            proxy.scrollTo(first.id, anchor: .top)
         }
     }
 }
