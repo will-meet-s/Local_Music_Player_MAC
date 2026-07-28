@@ -81,6 +81,14 @@ public final class PlayerViewModel: ObservableObject {
         }
     }
 
+    /// 右侧「正在播放」区的展示模式。
+    @Published public var nowPlayingLayout: NowPlayingLayout {
+        didSet {
+            guard oldValue != nowPlayingLayout else { return }
+            Preferences.nowPlayingLayout = nowPlayingLayout
+        }
+    }
+
     /// 磨砂背景的不透明度，下限见 `Preferences.minBackgroundOpacity`。
     @Published public var backgroundOpacity: Double {
         didSet {
@@ -113,6 +121,7 @@ public final class PlayerViewModel: ObservableObject {
         self.sortOrder = Preferences.sortOrder
         self.sortAscending = Preferences.sortAscending
         self.backgroundOpacity = Preferences.backgroundOpacity
+        self.nowPlayingLayout = Preferences.nowPlayingLayout
         self.queue = PlaybackQueue(count: 0, mode: mode)
 
         engine.volume = vol

@@ -10,6 +10,7 @@ public enum Preferences {
         static let sortOrder = "sortOrder"
         static let sortAscending = "sortAscending"
         static let backgroundOpacity = "backgroundOpacity"
+        static let nowPlayingLayout = "nowPlayingLayout"
     }
 
     /// 背景不透明度下限。再低文字就浮在桌面上没法看了。
@@ -54,6 +55,14 @@ public enum Preferences {
             return defaults.bool(forKey: Key.sortAscending)
         }
         set { defaults.set(newValue, forKey: Key.sortAscending) }
+    }
+
+    public static var nowPlayingLayout: NowPlayingLayout {
+        get {
+            guard let raw = defaults.string(forKey: Key.nowPlayingLayout) else { return .artworkAndLyrics }
+            return NowPlayingLayout(rawValue: raw) ?? .artworkAndLyrics
+        }
+        set { defaults.set(newValue.rawValue, forKey: Key.nowPlayingLayout) }
     }
 
     public static var backgroundOpacity: Double {

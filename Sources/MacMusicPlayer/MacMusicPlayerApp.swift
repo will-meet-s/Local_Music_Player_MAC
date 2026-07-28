@@ -37,6 +37,15 @@ struct MacMusicPlayerApp: App {
                 Button("选择文件夹…") { viewModel.chooseFolder() }
                     .keyboardShortcut("o", modifiers: [.command])
             }
+
+            CommandMenu("显示") {
+                Button("封面 + 歌词") { viewModel.nowPlayingLayout = .artworkAndLyrics }
+                    .keyboardShortcut("1", modifiers: [.command])
+                Button("只看封面") { viewModel.nowPlayingLayout = .artworkOnly }
+                    .keyboardShortcut("2", modifiers: [.command])
+                Button("只看歌词") { viewModel.nowPlayingLayout = .lyricsOnly }
+                    .keyboardShortcut("3", modifiers: [.command])
+            }
         }
 
         // 顶部状态栏常驻控制板。主窗口关掉后 App 仍留在这里。
