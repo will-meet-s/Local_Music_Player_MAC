@@ -1,7 +1,7 @@
 .build/
 build/
 # 由 Resources/AppIcon.png 经 scripts/make-icon.sh 生成，只在 macOS 上产出
-Resources/AppIcon.icns
+# Resources/AppIcon.icns 已在仓库中（网页上传时带入），故不再忽略
 .swiftpm/
 DerivedData/
 *.xcuserstate
