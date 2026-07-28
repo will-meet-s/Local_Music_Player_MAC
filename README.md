@@ -11,6 +11,19 @@
 - 记住上次的文件夹、播放模式和音量，下次启动自动恢复
 - 顶部状态栏常驻控制板：当前曲目 + 上一首 / 播放暂停 / 下一首 + 播放顺序
 - 搜索（歌名 / 歌手 / 专辑）与排序（文件顺序 / 歌曲名 / 歌手名，可升降序）
+- 磨砂半透明窗口背景（`NSVisualEffectView`，能透出桌面）
+
+## 外观
+
+窗口用 `NSVisualEffectView` 做整窗磨砂 —— 注意这和 SwiftUI 自带的 `.ultraThinMaterial`
+不是一回事，后者只在同一窗口内的图层间模糊，透不出桌面。
+
+想调材质或关掉，改 `Sources/MusicCore/Views/VisualEffect.swift`：
+
+- 换风格：`frostedBackground()` 的默认参数 `.underWindowBackground`
+  换成 `.hudWindow`（更暗）、`.sidebar`（更通透）、`.contentBackground`（几乎不透）
+- 完全关掉：把 `ContentView` 上的 `.frostedBackground()` 和 `TrackListView` 上的
+  `.background(VisualEffectView(material: .sidebar))` 两行删掉即可
 
 ## 搜索与排序
 

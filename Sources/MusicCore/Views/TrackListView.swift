@@ -12,6 +12,8 @@ struct TrackListView: View {
             content
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        // 侧栏用更通透的材质，和右侧拉开层次 —— 这是 macOS 原生的双色调做法
+        .background(VisualEffectView(material: .sidebar))
     }
 
     @ViewBuilder
@@ -31,6 +33,8 @@ struct TrackListView: View {
                     }
                 }
                 .listStyle(.inset)
+                // List 默认铺一层不透明背景，会把磨砂盖掉
+                .scrollContentBackground(.hidden)
                 // List 在内容变化时会保留原来的滚动偏移，搜索或改排序之后
                 // 看到的是列表中段，必须手动回顶。
                 .onChange(of: vm.searchText) { _, _ in scrollToTop(proxy) }
@@ -99,19 +103,17 @@ private struct ListToolbar: View {
 
                 Spacer()
 
-                Text(countText)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                // 总数在顶部标题栏，这里只在搜索时补一个命中数
+                if vm.isFiltering {
+                    Text("匹配 \(vm.tracks.count) 首")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .monospacedDigit()
+                }
             }
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 8)
-    }
-
-    private var countText: String {
-        vm.isFiltering
-            ? "\(vm.tracks.count) / \(vm.library.count) 首"
-            : "\(vm.library.count) 首"
     }
 }
 

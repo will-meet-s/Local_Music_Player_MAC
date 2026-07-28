@@ -26,6 +26,7 @@ public struct ContentView: View {
             Divider()
             ControlsBar()
         }
+        .frostedBackground()
         .task {
             vm.restoreLastSession()
         }
@@ -54,13 +55,18 @@ private struct HeaderBar: View {
 
             Spacer()
 
-            // 曲目数显示在列表工具条里，这里只留扫描进度
             if vm.isScanning {
                 ProgressView()
                     .controlSize(.small)
                 Text("扫描中…")
                     .font(.callout)
                     .foregroundStyle(.secondary)
+            } else if !vm.library.isEmpty {
+                // 文件夹里的总曲目数。搜索命中数另外显示在列表工具条上。
+                Text("共 \(vm.library.count) 首")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .monospacedDigit()
             }
         }
         .padding(.horizontal, 16)
