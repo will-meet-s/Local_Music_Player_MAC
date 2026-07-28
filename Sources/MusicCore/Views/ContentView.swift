@@ -26,7 +26,7 @@ public struct ContentView: View {
             Divider()
             ControlsBar()
         }
-        .frostedBackground()
+        .frostedBackground(opacity: vm.backgroundOpacity)
         .task {
             vm.restoreLastSession()
         }
@@ -35,6 +35,7 @@ public struct ContentView: View {
 
 private struct HeaderBar: View {
     @EnvironmentObject private var vm: PlayerViewModel
+    @State private var showingAppearance = false
 
     var body: some View {
         HStack(spacing: 12) {
@@ -68,9 +69,63 @@ private struct HeaderBar: View {
                     .foregroundStyle(.secondary)
                     .monospacedDigit()
             }
+
+            Button {
+                showingAppearance.toggle()
+            } label: {
+                Image(systemName: "circle.lefthalf.filled")
+            }
+            .help("背景透明度")
+            .popover(isPresented: $showingAppearance, arrowEdge: .bottom) {
+                AppearancePopover()
+                    .environmentObject(vm)
+            }
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 10)
+    }
+}
+
+/// 背景磨砂层的不透明度调节。
+///
+/// 调的只是背景 —— 文字和控件始终 100% 不透明，所以拉到最低也还能看清。
+private struct AppearancePopover: View {
+    @EnvironmentObject private var vm: PlayerViewModel
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text("背景不透明度")
+                    .font(.callout.weight(.medium))
+                Spacer()
+                Text("\(Int((vm.backgroundOpacity * 100).rounded()))%")
+                    .font(.callout.monospacedDigit())
+                    .foregroundStyle(.secondary)
+            }
+
+            HStack(spacing: 8) {
+                Image(systemName: "circle.dotted")
+                    .foregroundStyle(.secondary)
+                Slider(value: $vm.backgroundOpacity, in: Preferences.minBackgroundOpacity...1)
+                Image(systemName: "circle.fill")
+                    .foregroundStyle(.secondary)
+            }
+            .imageScale(.small)
+
+            HStack {
+                Text("最低 \(Int(Preferences.minBackgroundOpacity * 100))%")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+                Spacer()
+                Button("恢复不透明") {
+                    vm.backgroundOpacity = 1
+                }
+                .buttonStyle(.link)
+                .font(.caption)
+            }
+        }
+        .padding(14)
+        .frame(width: 260)
     }
 }
 

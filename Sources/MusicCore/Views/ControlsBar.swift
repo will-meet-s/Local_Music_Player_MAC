@@ -40,17 +40,9 @@ struct ControlsBar: View {
             }
 
             HStack(spacing: 18) {
-                Button {
-                    vm.cyclePlayMode()
-                } label: {
-                    Image(systemName: vm.playMode.symbolName)
-                        .frame(width: 22)
-                }
-                .buttonStyle(.plain)
-                .help(vm.playMode.displayName)
-
                 Spacer()
 
+                // 顺序：上一首 → 播放/暂停 → 下一首 → 停止 → 播放顺序
                 Button {
                     vm.previousTrack()
                 } label: {
@@ -70,6 +62,14 @@ struct ControlsBar: View {
                 .keyboardShortcut(.space, modifiers: [])
 
                 Button {
+                    vm.nextTrack()
+                } label: {
+                    Image(systemName: "forward.fill").font(.title3)
+                }
+                .buttonStyle(.plain)
+                .disabled(vm.tracks.isEmpty)
+
+                Button {
                     vm.stop()
                 } label: {
                     Image(systemName: "stop.fill").font(.title3)
@@ -78,12 +78,13 @@ struct ControlsBar: View {
                 .disabled(!hasTrack)
 
                 Button {
-                    vm.nextTrack()
+                    vm.cyclePlayMode()
                 } label: {
-                    Image(systemName: "forward.fill").font(.title3)
+                    Image(systemName: vm.playMode.symbolName)
+                        .frame(width: 22)
                 }
                 .buttonStyle(.plain)
-                .disabled(vm.tracks.isEmpty)
+                .help(vm.playMode.displayName)
 
                 Spacer()
 

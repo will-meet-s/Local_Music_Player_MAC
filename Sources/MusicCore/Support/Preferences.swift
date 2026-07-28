@@ -9,7 +9,11 @@ public enum Preferences {
         static let volume = "volume"
         static let sortOrder = "sortOrder"
         static let sortAscending = "sortAscending"
+        static let backgroundOpacity = "backgroundOpacity"
     }
+
+    /// 背景不透明度下限。再低文字就浮在桌面上没法看了。
+    public static let minBackgroundOpacity: Double = 0.2
 
     private static var defaults: UserDefaults { .standard }
 
@@ -50,6 +54,18 @@ public enum Preferences {
             return defaults.bool(forKey: Key.sortAscending)
         }
         set { defaults.set(newValue, forKey: Key.sortAscending) }
+    }
+
+    public static var backgroundOpacity: Double {
+        get {
+            guard defaults.object(forKey: Key.backgroundOpacity) != nil else { return 1 }
+            return clampOpacity(defaults.double(forKey: Key.backgroundOpacity))
+        }
+        set { defaults.set(clampOpacity(newValue), forKey: Key.backgroundOpacity) }
+    }
+
+    static func clampOpacity(_ value: Double) -> Double {
+        min(1, max(minBackgroundOpacity, value))
     }
 
     public static var volume: Double {

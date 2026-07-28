@@ -18,6 +18,9 @@
 窗口用 `NSVisualEffectView` 做整窗磨砂 —— 注意这和 SwiftUI 自带的 `.ultraThinMaterial`
 不是一回事，后者只在同一窗口内的图层间模糊，透不出桌面。
 
+**背景不透明度**可在界面上调：顶部标题栏右侧的半圆图标 → 滑块，范围 **20% – 100%**，
+设置会被记住。调的只是背景磨砂层，文字和控件始终 100% 不透明，所以拉到最低仍能看清内容。
+
 想调材质或关掉，改 `Sources/MusicCore/Views/VisualEffect.swift`：
 
 - 换风格：`frostedBackground()` 的默认参数 `.underWindowBackground`

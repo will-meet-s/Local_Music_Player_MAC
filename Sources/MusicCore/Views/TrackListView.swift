@@ -13,7 +13,7 @@ struct TrackListView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         // 侧栏用更通透的材质，和右侧拉开层次 —— 这是 macOS 原生的双色调做法
-        .background(VisualEffectView(material: .sidebar))
+        .background(VisualEffectView(material: .sidebar, opacity: vm.backgroundOpacity))
     }
 
     @ViewBuilder

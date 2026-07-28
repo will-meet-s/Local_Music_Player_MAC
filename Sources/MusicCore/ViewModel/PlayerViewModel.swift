@@ -81,6 +81,18 @@ public final class PlayerViewModel: ObservableObject {
         }
     }
 
+    /// 磨砂背景的不透明度，下限见 `Preferences.minBackgroundOpacity`。
+    @Published public var backgroundOpacity: Double {
+        didSet {
+            let clamped = Preferences.clampOpacity(backgroundOpacity)
+            if clamped != backgroundOpacity {
+                backgroundOpacity = clamped
+                return
+            }
+            Preferences.backgroundOpacity = clamped
+        }
+    }
+
     @Published public var errorMessage: String?
 
     // MARK: - 内部
@@ -100,6 +112,7 @@ public final class PlayerViewModel: ObservableObject {
         self.volume = vol
         self.sortOrder = Preferences.sortOrder
         self.sortAscending = Preferences.sortAscending
+        self.backgroundOpacity = Preferences.backgroundOpacity
         self.queue = PlaybackQueue(count: 0, mode: mode)
 
         engine.volume = vol

@@ -12,29 +12,36 @@ public struct VisualEffectView: NSViewRepresentable {
     public var blendingMode: NSVisualEffectView.BlendingMode
     /// `.active` 表示窗口失焦时也保持磨砂；`.followsWindowActiveState` 则会变灰。
     public var state: NSVisualEffectView.State
+    /// 磨砂层自身的不透明度。调的只是背景 —— 前景文字和控件始终不受影响。
+    public var opacity: Double
 
     public init(
         material: NSVisualEffectView.Material = .underWindowBackground,
         blendingMode: NSVisualEffectView.BlendingMode = .behindWindow,
-        state: NSVisualEffectView.State = .active
+        state: NSVisualEffectView.State = .active,
+        opacity: Double = 1
     ) {
         self.material = material
         self.blendingMode = blendingMode
         self.state = state
+        self.opacity = opacity
     }
 
     public func makeNSView(context: Context) -> NSVisualEffectView {
         let view = NSVisualEffectView()
-        view.material = material
-        view.blendingMode = blendingMode
-        view.state = state
+        apply(to: view)
         return view
     }
 
     public func updateNSView(_ view: NSVisualEffectView, context: Context) {
+        apply(to: view)
+    }
+
+    private func apply(to view: NSVisualEffectView) {
         view.material = material
         view.blendingMode = blendingMode
         view.state = state
+        view.alphaValue = max(0, min(1, opacity))
     }
 }
 
@@ -61,8 +68,11 @@ struct TransparentWindow: NSViewRepresentable {
 
 extension View {
     /// 给整个窗口铺上磨砂背景。
-    func frostedBackground(_ material: NSVisualEffectView.Material = .underWindowBackground) -> some View {
-        background(VisualEffectView(material: material))
+    func frostedBackground(
+        _ material: NSVisualEffectView.Material = .underWindowBackground,
+        opacity: Double = 1
+    ) -> some View {
+        background(VisualEffectView(material: material, opacity: opacity))
             .background(TransparentWindow())
     }
 }
