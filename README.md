@@ -9,6 +9,14 @@
 - 四种播放顺序：顺序播放 → 列表循环 → 单曲循环 → 随机（点左下角按钮循环切换）
 - 歌词显示：同名 `.lrc` 优先，其次读音频内嵌歌词；逐行高亮并自动滚动，点某行可跳播
 - 记住上次的文件夹、播放模式和音量，下次启动自动恢复
+- 顶部状态栏常驻控制板：当前曲目 + 上一首 / 播放暂停 / 下一首 + 播放顺序
+
+## 状态栏控制板
+
+菜单栏右侧有个音符图标，点开是一个小面板，不用切回主窗口就能切歌和暂停。
+
+**关掉主窗口后 App 不会退出**，继续在状态栏里放歌 —— 这是「常驻」的前提。要真正退出用
+`⌘Q`，或点面板里的「退出」。想把主窗口叫回来，点面板里的「显示主窗口」或 Dock 图标。
 
 ## 环境要求
 
@@ -130,6 +138,7 @@ Sources/
     Playback/           PlaybackQueue（顺序逻辑）、PlayerEngine（AVPlayer 封装）
     ViewModel/          PlayerViewModel（UI 唯一数据源）
     Views/              ContentView / TrackListView / NowPlayingView / LyricsView / ControlsBar
+                        MenuBarPanel（状态栏控制板）
     Support/            Preferences（UserDefaults）、TimeFormat
 Tests/MusicCoreTests/   LRCParser / PlaybackQueue / LibraryScanner / LyricsProvider 单测
 docs/superpowers/specs/ 设计文档

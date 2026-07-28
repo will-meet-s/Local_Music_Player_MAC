@@ -10,7 +10,7 @@ struct MacMusicPlayerApp: App {
     @StateObject private var viewModel = PlayerViewModel()
 
     var body: some Scene {
-        WindowGroup("音乐播放器") {
+        WindowGroup("音乐播放器", id: PlayerWindow.mainID) {
             ContentView()
                 .environmentObject(viewModel)
                 .frame(minWidth: 880, minHeight: 560)
@@ -38,6 +38,15 @@ struct MacMusicPlayerApp: App {
                     .keyboardShortcut("o", modifiers: [.command])
             }
         }
+
+        // 顶部状态栏常驻控制板。主窗口关掉后 App 仍留在这里。
+        MenuBarExtra {
+            MenuBarPanel()
+                .environmentObject(viewModel)
+        } label: {
+            Image(systemName: viewModel.isPlaying ? "music.note" : "music.note.list")
+        }
+        .menuBarExtraStyle(.window)
     }
 }
 
@@ -49,7 +58,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.activate(ignoringOtherApps: true)
     }
 
+    /// 返回 false，这样关掉主窗口后 App 继续在状态栏里播放。
+    /// 退出走 ⌘Q 或状态栏面板里的「退出」。
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
-        true
+        false
+    }
+
+    /// 点 Dock 图标时把主窗口叫回来。
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows: Bool) -> Bool {
+        if !hasVisibleWindows {
+            NSApp.activate(ignoringOtherApps: true)
+        }
+        return true
     }
 }
