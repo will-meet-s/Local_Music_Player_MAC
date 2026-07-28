@@ -55,10 +55,7 @@ public enum MetadataLoader {
         var gain = ReplayGain()
 
         for item in items {
-            // TXXX 的键名在 extraAttributes 的 info 里，不是 item.key
-            let description = (item.extraAttributes?[.info] as? String)
-                ?? (item.key as? String)
-                ?? ""
+            let description = await replayGainKeyDescription(of: item)
             guard !description.isEmpty else { continue }
 
             let isGain = ReplayGain.isTrackGainKey(description)
@@ -75,6 +72,23 @@ public enum MetadataLoader {
         }
 
         return gain.isEmpty ? nil : gain
+    }
+
+    /// 取出条目的「键名」用于匹配 ReplayGain 字段。
+    ///
+    /// ID3 的 TXXX 是自定义帧，真正的键名在 extraAttributes 的 info 里，
+    /// `item.key` 只是 "TXXX" 本身。其他格式直接用 key。
+    private static func replayGainKeyDescription(of item: AVMetadataItem) async -> String {
+        if let key = item.key as? String,
+           ReplayGain.isTrackGainKey(key) || ReplayGain.isTrackPeakKey(key) {
+            return key
+        }
+
+        guard let attributes = try? await item.load(.extraAttributes),
+              let info = attributes[.info] as? String else {
+            return ""
+        }
+        return info
     }
 
     /// 收集所有可用元数据格式里的条目。

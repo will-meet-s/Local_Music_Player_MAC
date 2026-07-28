@@ -7,7 +7,7 @@ import Foundation
 ///
 /// 只处理**曲目级**（TRACK）而不是专辑级（ALBUM）增益 —— 随机播放是常态，
 /// 专辑级增益只在整张连听时才正确。
-public struct ReplayGain: Equatable, Sendable {
+public struct ReplayGain: Hashable, Sendable {
 
     /// 相对参考响度的增益，单位 dB。负值表示这首偏响、需要衰减。
     public var trackGainDB: Double?
