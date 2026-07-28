@@ -1,0 +1,81 @@
+# MacMusicPlayer
+
+一个给 Apple Silicon Mac（M4）用的本地音乐播放器。SwiftUI + AVFoundation，零第三方依赖，不联网。
+
+## 功能
+
+- 选择文件夹，递归扫描音乐（mp3 / m4a / aac / flac / wav / aiff / alac / caf）
+- 播放、暂停、停止、上一首、下一首、拖动进度、音量调节
+- 四种播放顺序：顺序播放 → 列表循环 → 单曲循环 → 随机（点左下角按钮循环切换）
+- 歌词显示：同名 `.lrc` 优先，其次读音频内嵌歌词；逐行高亮并自动滚动，点某行可跳播
+- 记住上次的文件夹、播放模式和音量，下次启动自动恢复
+
+## 环境要求
+
+macOS 14+，Xcode 15+（或 Swift 5.9+ 命令行工具）。
+
+## 构建运行
+
+```bash
+cd MacMusicPlayer
+
+swift test          # 跑单元测试
+make app            # 生成 build/MacMusicPlayer.app
+make run            # 构建并启动
+```
+
+也可以直接 `open Package.swift` 用 Xcode 打开，选 `MacMusicPlayer` scheme 运行。
+
+开发时想快速跑一下：`swift run MacMusicPlayer`（窗口会正常出现，只是没有独立的 .app 图标）。
+
+## 快捷键
+
+| 操作 | 快捷键 |
+|---|---|
+| 播放 / 暂停 | `空格` 或 `⌘P` |
+| 停止 | `⌘.` |
+| 上一首 / 下一首 | `⌘←` / `⌘→` |
+| 切换播放顺序 | `⌘L` |
+| 选择文件夹 | `⌘O` |
+
+## 歌词
+
+把 `.lrc` 文件和音频文件放在同一目录、取同样的文件名即可：
+
+```
+Music/
+  周杰伦 - 晴天.mp3
+  周杰伦 - 晴天.lrc
+```
+
+支持 `[mm:ss.xx]`、一行多时间戳、`[offset:N]` 校准；`[ti:]` `[ar:]` 等元信息标签会被忽略。
+文件编码优先按 UTF-8 读，失败自动退 GB18030（兼容常见中文歌词文件）。
+
+没有 `.lrc` 时会尝试读音频内嵌歌词（ID3 USLT / iTunes lyrics）。内嵌歌词通常没有时间戳，
+此时只静态展示全文，不做高亮滚动。
+
+## 代码结构
+
+```
+Sources/
+  MacMusicPlayer/       @main 入口 + NSApplicationDelegate
+  MusicCore/
+    Models/             Track / LyricLine / PlayMode
+    Library/            LibraryScanner（扫描）、MetadataLoader（元数据）
+    Lyrics/             LRCParser（解析）、LyricsProvider（查找）
+    Playback/           PlaybackQueue（顺序逻辑）、PlayerEngine（AVPlayer 封装）
+    ViewModel/          PlayerViewModel（UI 唯一数据源）
+    Views/              ContentView / TrackListView / NowPlayingView / LyricsView / ControlsBar
+    Support/            Preferences（UserDefaults）、TimeFormat
+Tests/MusicCoreTests/   LRCParser / PlaybackQueue / LibraryScanner / LyricsProvider 单测
+docs/superpowers/specs/ 设计文档
+```
+
+播放顺序逻辑（`PlaybackQueue`）和歌词解析（`LRCParser`）都是不碰音频设备的纯逻辑，
+因此可以完整单测；`PlayerEngine` 与 `MetadataLoader` 依赖真实音频文件，由手动验收覆盖。
+
+## 已知限制
+
+- 应用未沙盒化、只做 ad-hoc 签名，仅供本机使用；分发给别人需要开发者证书公证
+- 不做在线歌词下载、标签编辑、均衡器、媒体键集成
+- FLAC 等 Vorbis 系格式读不到内嵌歌词（用 `.lrc` 即可）
