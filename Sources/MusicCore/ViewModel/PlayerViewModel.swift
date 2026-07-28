@@ -311,6 +311,10 @@ public final class PlayerViewModel: ObservableObject {
         playMode = playMode.next
     }
 
+    public func cycleNowPlayingLayout() {
+        nowPlayingLayout = nowPlayingLayout.next
+    }
+
     // MARK: - 内部流转
 
     private func advance(auto: Bool) {

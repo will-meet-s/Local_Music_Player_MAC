@@ -6,9 +6,7 @@ struct NowPlayingView: View {
     @EnvironmentObject private var vm: PlayerViewModel
 
     var body: some View {
-        VStack(spacing: 12) {
-            LayoutPicker()
-
+        Group {
             switch vm.nowPlayingLayout {
             case .artworkAndLyrics:
                 artworkAndLyrics
@@ -20,6 +18,12 @@ struct NowPlayingView: View {
         }
         .padding(20)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        // 让空白处也能接收点击，否则只有文字和图片本身可点
+        .contentShape(Rectangle())
+        .onTapGesture {
+            vm.cycleNowPlayingLayout()
+        }
+        .help("点击切换展示模式：\(vm.nowPlayingLayout.next.displayName)")
         .animation(.easeInOut(duration: 0.2), value: vm.nowPlayingLayout)
     }
 
@@ -59,27 +63,6 @@ struct NowPlayingView: View {
 
             LyricsView()
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-        }
-    }
-}
-
-/// 模式切换的分段控件。
-private struct LayoutPicker: View {
-    @EnvironmentObject private var vm: PlayerViewModel
-
-    var body: some View {
-        HStack {
-            Spacer()
-            Picker("展示模式", selection: $vm.nowPlayingLayout) {
-                ForEach(NowPlayingLayout.allCases, id: \.self) { layout in
-                    Image(systemName: layout.symbolName)
-                        .help(layout.displayName)
-                        .tag(layout)
-                }
-            }
-            .labelsHidden()
-            .pickerStyle(.segmented)
-            .frame(width: 130)
         }
     }
 }

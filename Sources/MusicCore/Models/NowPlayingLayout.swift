@@ -9,6 +9,13 @@ public enum NowPlayingLayout: String, CaseIterable, Codable, Sendable {
     /// 只展示歌词，占满整个区域。
     case lyricsOnly
 
+    /// 循环切换到下一种模式。
+    public var next: NowPlayingLayout {
+        let all = NowPlayingLayout.allCases
+        let i = all.firstIndex(of: self) ?? 0
+        return all[(i + 1) % all.count]
+    }
+
     public var displayName: String {
         switch self {
         case .artworkAndLyrics: return "封面 + 歌词"
