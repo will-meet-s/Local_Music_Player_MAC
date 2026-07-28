@@ -104,8 +104,19 @@ Music/
 支持 `[mm:ss.xx]`、一行多时间戳、`[offset:N]` 校准；`[ti:]` `[ar:]` 等元信息标签会被忽略。
 文件编码优先按 UTF-8 读，失败自动退 GB18030（兼容常见中文歌词文件）。
 
-没有 `.lrc` 时会尝试读音频内嵌歌词（ID3 USLT / iTunes lyrics）。内嵌歌词通常没有时间戳，
-此时只静态展示全文，不做高亮滚动。
+没有 `.lrc` 时会尝试读音频内嵌歌词。内嵌歌词若没有时间戳，只静态展示全文，不做高亮滚动。
+
+各格式的内嵌歌词支持情况：
+
+| 格式 | 标签载体 | 支持 | 说明 |
+|---|---|---|---|
+| mp3 | ID3 USLT | ✅ | AVFoundation |
+| m4a / aac / alac | iTunes `©lyr` | ✅ | AVFoundation |
+| **flac** | **Vorbis Comment** | ✅ | AVFoundation 不解析 Vorbis Comment，由 `FlacMetadata` 自行读取 |
+| aiff | ID3 chunk | ⚠️ | 取决于系统是否暴露该 chunk |
+| wav | — | ❌ | 格式本身没有标准歌词标签，只能用 `.lrc` |
+
+FLAC 的标题 / 艺术家 / 专辑 / 封面同样走 `FlacMetadata` 兜底，所以这些字段也能正常显示。
 
 ## 代码结构
 
@@ -114,7 +125,7 @@ Sources/
   MacMusicPlayer/       @main 入口 + NSApplicationDelegate
   MusicCore/
     Models/             Track / LyricLine / PlayMode
-    Library/            LibraryScanner（扫描）、MetadataLoader（元数据）
+    Library/            LibraryScanner（扫描）、MetadataLoader（元数据）、FlacMetadata（Vorbis Comment）
     Lyrics/             LRCParser（解析）、LyricsProvider（查找）
     Playback/           PlaybackQueue（顺序逻辑）、PlayerEngine（AVPlayer 封装）
     ViewModel/          PlayerViewModel（UI 唯一数据源）
@@ -131,4 +142,4 @@ docs/superpowers/specs/ 设计文档
 
 - 应用未沙盒化、只做 ad-hoc 签名，仅供本机使用；分发给别人需要开发者证书公证
 - 不做在线歌词下载、标签编辑、均衡器、媒体键集成
-- FLAC 等 Vorbis 系格式读不到内嵌歌词（用 `.lrc` 即可）
+- WAV 没有标准歌词标签，只能靠同名 `.lrc`

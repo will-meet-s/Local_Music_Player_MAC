@@ -22,12 +22,56 @@ public enum MetadataLoader {
             await applyCommonMetadata(common, to: &track)
         }
 
-        if let all = try? await asset.load(.metadata) {
-            track.embeddedLyrics = await extractLyrics(from: all)
-        }
+        let allItems = await gatherAllMetadata(from: asset)
+        track.embeddedLyrics = await extractLyrics(from: allItems)
+
+        // FLAC 用 Vorbis Comment 存标签，AVFoundation 不解析它，只能自己读。
+        applyFlacFallback(to: &track)
 
         track.metadataLoaded = true
         return track
+    }
+
+    /// 收集所有可用元数据格式里的条目。
+    ///
+    /// `asset.metadata` 只返回容器认定的「主要」格式，一个文件同时带 ID3v2 和
+    /// iTunes 标签时会漏掉其中一套，所以这里逐个格式取。
+    private static func gatherAllMetadata(from asset: AVAsset) async -> [AVMetadataItem] {
+        var items: [AVMetadataItem] = []
+
+        if let formats = try? await asset.load(.availableMetadataFormats) {
+            for format in formats {
+                if let formatItems = try? await asset.loadMetadata(for: format) {
+                    items.append(contentsOf: formatItems)
+                }
+            }
+        }
+
+        if items.isEmpty, let fallback = try? await asset.load(.metadata) {
+            items = fallback
+        }
+
+        return items
+    }
+
+    /// FLAC 走自研的 Vorbis Comment 解析，只填 AVFoundation 没能填上的字段。
+    private static func applyFlacFallback(to track: inout Track) {
+        guard track.url.pathExtension.lowercased() == "flac" else { return }
+
+        let needsSomething = track.artist == nil
+            || track.album == nil
+            || track.artworkData == nil
+            || track.embeddedLyrics == nil
+        guard needsSomething, let tags = FlacMetadata.read(url: track.url) else { return }
+
+        // 标题只在 AVFoundation 也没给出时才覆盖 —— 默认值是文件名
+        if let title = tags.title, track.title == track.url.deletingPathExtension().lastPathComponent {
+            track.title = title
+        }
+        if track.artist == nil { track.artist = tags.artist }
+        if track.album == nil { track.album = tags.album }
+        if track.artworkData == nil { track.artworkData = tags.artwork }
+        if track.embeddedLyrics == nil { track.embeddedLyrics = tags.lyrics }
     }
 
     private static func applyCommonMetadata(_ items: [AVMetadataItem], to track: inout Track) async {
@@ -64,11 +108,25 @@ public enum MetadataLoader {
         ]
         for identifier in identifiers {
             let matches = AVMetadataItem.metadataItems(from: items, filteredByIdentifier: identifier)
-            for item in matches {
-                if let s = try? await item.load(.stringValue),
-                   !s.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    return s
-                }
+            if let text = await firstNonEmptyString(in: matches) { return text }
+        }
+
+        // 有些打标签软件把歌词塞进自定义键（ID3 TXXX、iTunes ----），
+        // 这类条目没有标准 identifier，只能按键名兜底匹配。
+        let byKey = items.filter { item in
+            // iTunes 的四字符键是 NSNumber，转不成 String，所以 identifier 也一并看
+            let key = (item.key as? String) ?? ""
+            let identifier = item.identifier?.rawValue ?? ""
+            return (key + identifier).uppercased().contains("LYRIC")
+        }
+        return await firstNonEmptyString(in: byKey)
+    }
+
+    private static func firstNonEmptyString(in items: [AVMetadataItem]) async -> String? {
+        for item in items {
+            if let s = try? await item.load(.stringValue),
+               !s.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                return s
             }
         }
         return nil
