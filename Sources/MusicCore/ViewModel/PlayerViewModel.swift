@@ -71,6 +71,28 @@ public final class PlayerViewModel: ObservableObject {
         didSet {
             queue.mode = playMode
             Preferences.playMode = playMode
+            // 顺序变了，之前预判的「下一首」作废
+            engine.invalidatePreload()
+        }
+    }
+
+    /// 是否按 ReplayGain 标签做音量归一化。
+    @Published public var replayGainEnabled: Bool {
+        didSet {
+            guard oldValue != replayGainEnabled else { return }
+            Preferences.replayGainEnabled = replayGainEnabled
+            // 增益是在创建播放条目时施加的，改了要重建预加载；
+            // 当前这首要等下次切歌才生效
+            engine.invalidatePreload()
+        }
+    }
+
+    /// 是否把系统输出设备的采样率切到与当前文件一致。
+    @Published public var sampleRateMatchingEnabled: Bool {
+        didSet {
+            guard oldValue != sampleRateMatchingEnabled else { return }
+            Preferences.sampleRateMatchingEnabled = sampleRateMatchingEnabled
+            engine.matchesOutputSampleRate = sampleRateMatchingEnabled
         }
     }
 
@@ -122,9 +144,12 @@ public final class PlayerViewModel: ObservableObject {
         self.sortAscending = Preferences.sortAscending
         self.backgroundOpacity = Preferences.backgroundOpacity
         self.nowPlayingLayout = Preferences.nowPlayingLayout
+        self.replayGainEnabled = Preferences.replayGainEnabled
+        self.sampleRateMatchingEnabled = Preferences.sampleRateMatchingEnabled
         self.queue = PlaybackQueue(count: 0, mode: mode)
 
         engine.volume = vol
+        engine.matchesOutputSampleRate = Preferences.sampleRateMatchingEnabled
         wireEngineCallbacks()
     }
 
@@ -252,6 +277,9 @@ public final class PlayerViewModel: ObservableObject {
             queue.clearSelection()
             currentIndex = nil
         }
+
+        // 列表变了，预判的「下一首」可能已经不对
+        engine.invalidatePreload()
     }
 
     public func clearSearch() {
@@ -317,17 +345,11 @@ public final class PlayerViewModel: ObservableObject {
 
     // MARK: - 内部流转
 
+    /// 手动切歌。自动推进由引擎的无缝队列负责，不走这里。
     private func advance(auto: Bool) {
-        guard let next = queue.next(auto: auto) else {
+        guard queue.next(auto: auto) != nil else {
             // 顺序播放到达列表末尾
             stop()
-            return
-        }
-        // 单曲循环自动重播时，直接从头播，不必重新加载文件
-        if auto && playMode == .repeatOne && next == currentIndex {
-            engine.seek(to: 0)
-            engine.play()
-            isPlaying = true
             return
         }
         startCurrent()
@@ -343,8 +365,42 @@ public final class PlayerViewModel: ObservableObject {
         duration = track.duration
         refreshLyrics(for: track)
 
-        engine.load(url: track.url, autoplay: true)
+        engine.load(playable(for: track), autoplay: true)
         isPlaying = engine.isPlaying
+    }
+
+    /// 引擎已无缝推进到下一首，这里只需把界面状态跟上。
+    private func handleAutoAdvance(to url: URL) {
+        // 推进播放队列。正常情况它给出的就是引擎已经切到的那首；
+        // 若期间列表被排序/过滤改动过，就按 URL 重新对齐。
+        let expected = queue.next(auto: true)
+
+        if let expected, tracks.indices.contains(expected), tracks[expected].url == url {
+            currentIndex = expected
+        } else if let found = tracks.firstIndex(where: { $0.url == url }) {
+            queue.select(found)
+            currentIndex = found
+        } else {
+            // 这首已被搜索过滤掉，继续播但列表里不高亮
+            currentIndex = nil
+        }
+
+        let track = currentIndex.map { tracks[$0] }
+            ?? library.first { $0.url == url }
+            ?? Track(url: url)
+
+        playingTrack = track
+        currentTime = 0
+        duration = track.duration
+        refreshLyrics(for: track)
+        isPlaying = true
+        consecutiveFailures = 0
+    }
+
+    /// 组装引擎需要的播放条目：URL + 归一化增益 + 采样率。
+    private func playable(for track: Track) -> PlayableItem {
+        let gain = replayGainEnabled ? (track.replayGain?.linearGain() ?? 1) : 1
+        return PlayableItem(url: track.url, gain: gain, sampleRate: track.sampleRate)
     }
 
     private func refreshLyrics(for track: Track) {
@@ -361,8 +417,28 @@ public final class PlayerViewModel: ObservableObject {
             self.updateLyricHighlight(at: seconds)
         }
 
-        engine.onFinish = { [weak self] in
-            self?.advance(auto: true)
+        // 引擎会提前把下一首塞进队列缓冲以实现无缝切歌。
+        // peekNext 不能有副作用 —— 此刻当前曲还在播，队列位置不能动。
+        engine.provideNext = { [weak self] in
+            guard let self,
+                  let index = self.queue.peekNext(auto: true),
+                  self.tracks.indices.contains(index) else { return nil }
+            return self.playable(for: self.tracks[index])
+        }
+
+        engine.onAdvanced = { [weak self] url in
+            self?.handleAutoAdvance(to: url)
+        }
+
+        engine.onQueueExhausted = { [weak self] in
+            guard let self else { return }
+            // 队列里没有下一首了。顺序播放到底就是停；随机模式一轮播完时
+            // peekNext 拿不到新顺序，此处补一次真正的推进。
+            if let next = self.queue.next(auto: true), self.tracks.indices.contains(next) {
+                self.startCurrent()
+            } else {
+                self.stop()
+            }
         }
 
         engine.onError = { [weak self] message in

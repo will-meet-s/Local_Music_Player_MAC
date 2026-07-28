@@ -147,6 +147,78 @@ final class PlaybackQueueTests: XCTestCase {
         XCTAssertNil(q.current)
     }
 
+    // MARK: - peekNext（无缝播放的预加载依据）
+
+    func testPeekDoesNotMutateState() {
+        var q = PlaybackQueue(count: 5, mode: .repeatAll)
+        q.select(2)
+
+        _ = q.peekNext(auto: true)
+        _ = q.peekNext(auto: true)
+        _ = q.peekNext(auto: true)
+
+        XCTAssertEqual(q.current, 2, "预看不能推进队列")
+        XCTAssertEqual(q.next(auto: true), 3, "多次预看之后，真正推进仍应是 3")
+    }
+
+    func testPeekAgreesWithNextSequential() {
+        var q = PlaybackQueue(count: 4, mode: .sequential)
+        q.select(0)
+
+        for _ in 0..<3 {
+            let peeked = q.peekNext(auto: true)
+            XCTAssertEqual(peeked, q.next(auto: true))
+        }
+        // 末尾两者都应给出 nil
+        XCTAssertNil(q.peekNext(auto: true))
+        XCTAssertNil(q.next(auto: true))
+    }
+
+    func testPeekAgreesWithNextRepeatAll() {
+        var q = PlaybackQueue(count: 3, mode: .repeatAll)
+        q.select(2)
+        XCTAssertEqual(q.peekNext(auto: true), 0)
+        XCTAssertEqual(q.next(auto: true), 0)
+    }
+
+    func testPeekRepeatsCurrentInRepeatOne() {
+        var q = PlaybackQueue(count: 3, mode: .repeatOne)
+        q.select(1)
+        XCTAssertEqual(q.peekNext(auto: true), 1, "单曲循环预看到的就是自己，用于无缝循环")
+        XCTAssertEqual(q.peekNext(auto: false), 2, "手动下一首仍然前进")
+    }
+
+    func testPeekReturnsNilAtShuffleRoundBoundary() {
+        var q = PlaybackQueue(count: 3, mode: .shuffle)
+        for _ in 0..<3 { _ = q.next(auto: false) }
+
+        XCTAssertNil(q.peekNext(auto: true),
+                     "下一轮的随机顺序尚未生成，预看应放弃而不是猜")
+        XCTAssertNotNil(q.next(auto: true), "真正推进时会重新洗牌，仍要给出结果")
+    }
+
+    func testPeekWithoutSelectionReturnsFirst() {
+        let q = PlaybackQueue(count: 3, mode: .sequential)
+        XCTAssertEqual(q.peekNext(auto: true), 0)
+    }
+
+    func testPeekOnEmptyQueue() {
+        let q = PlaybackQueue(count: 0, mode: .repeatAll)
+        XCTAssertNil(q.peekNext(auto: true))
+    }
+
+    // MARK: - clearSelection
+
+    func testClearSelectionResetsToListHead() {
+        var q = PlaybackQueue(count: 5, mode: .repeatAll)
+        q.select(3)
+
+        q.clearSelection()
+
+        XCTAssertNil(q.current)
+        XCTAssertEqual(q.next(auto: false), 0, "清除后应从头开始")
+    }
+
     // MARK: - 模式切换
 
     func testChangingModeToSameValueDoesNotResetPosition() {

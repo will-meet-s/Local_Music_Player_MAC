@@ -192,6 +192,28 @@ final class FlacMetadataTests: XCTestCase {
         XCTAssertEqual(try XCTUnwrap(FlacMetadata.read(url: url)).album, "正常")
     }
 
+    func testReadsReplayGainTags() throws {
+        let body = vorbisCommentBody([
+            "TITLE=有增益标签",
+            "REPLAYGAIN_TRACK_GAIN=-6.54 dB",
+            "REPLAYGAIN_TRACK_PEAK=0.988525"
+        ])
+        let url = try writeFlac(blocks: [(4, body)])
+
+        let tags = try XCTUnwrap(FlacMetadata.read(url: url))
+
+        XCTAssertEqual(tags.replayGain.trackGainDB!, -6.54, accuracy: 0.0001)
+        XCTAssertEqual(tags.replayGain.trackPeak!, 0.988525, accuracy: 0.000001)
+    }
+
+    func testIgnoresAlbumLevelReplayGain() throws {
+        // 随机播放是常态，专辑级增益只在整张连听时才正确
+        let body = vorbisCommentBody(["REPLAYGAIN_ALBUM_GAIN=-8.00 dB"])
+        let url = try writeFlac(blocks: [(4, body)])
+
+        XCTAssertNil(FlacMetadata.read(url: url))
+    }
+
     func testNoTagBlockReturnsNil() throws {
         let url = try writeFlac(blocks: [])
         XCTAssertNil(FlacMetadata.read(url: url))

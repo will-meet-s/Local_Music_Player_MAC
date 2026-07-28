@@ -51,6 +51,31 @@ public struct PlaybackQueue {
         position = order.firstIndex(of: index) ?? 0
     }
 
+    /// 预看下一首是谁，**不改变任何状态**。
+    ///
+    /// 无缝播放需要提前把下一首塞进播放队列缓冲，但那时当前曲还在播，
+    /// 队列位置不能动 —— 所以不能用 `next(auto:)`。
+    ///
+    /// 有一处与 `next` 不一致：随机模式播到一轮末尾时返回 nil。
+    /// 下一轮的随机顺序要到真正翻页时才洗出来，预看阶段无从得知，
+    /// 代价是每轮有且仅有一次切歌拿不到无缝。
+    public func peekNext(auto: Bool) -> Int? {
+        guard count > 0 else { return nil }
+        guard let c = current else { return order.first }
+
+        if auto && mode == .repeatOne { return c }
+
+        if position + 1 < order.count {
+            return order[position + 1]
+        }
+
+        switch mode {
+        case .sequential: return nil
+        case .shuffle: return nil
+        case .repeatAll, .repeatOne: return order.first
+        }
+    }
+
     /// 下一首。
     /// - Parameter auto: true 表示当前曲目自然播完触发（单曲循环会重播当前曲）；
     ///                   false 表示用户点了「下一首」（单曲循环也前进）。

@@ -24,12 +24,57 @@ public enum MetadataLoader {
 
         let allItems = await gatherAllMetadata(from: asset)
         track.embeddedLyrics = await extractLyrics(from: allItems)
+        track.replayGain = await extractReplayGain(from: allItems)
+        track.sampleRate = await readSampleRate(from: asset)
 
         // FLAC 用 Vorbis Comment 存标签，AVFoundation 不解析它，只能自己读。
         applyFlacFallback(to: &track)
 
         track.metadataLoaded = true
         return track
+    }
+
+    /// 读取音频轨的采样率（Hz）。
+    private static func readSampleRate(from asset: AVAsset) async -> Double? {
+        guard let track = try? await asset.loadTracks(withMediaType: .audio).first,
+              let descriptions = try? await track.load(.formatDescriptions),
+              let description = descriptions.first else {
+            return nil
+        }
+
+        guard let basic = CMAudioFormatDescriptionGetStreamBasicDescription(description) else {
+            return nil
+        }
+
+        let rate = basic.pointee.mSampleRate
+        return rate > 0 ? rate : nil
+    }
+
+    /// ReplayGain 在 mp3 里存于 ID3 的 TXXX 自定义帧，描述字段才是键名。
+    private static func extractReplayGain(from items: [AVMetadataItem]) async -> ReplayGain? {
+        var gain = ReplayGain()
+
+        for item in items {
+            // TXXX 的键名在 extraAttributes 的 info 里，不是 item.key
+            let description = (item.extraAttributes?[.info] as? String)
+                ?? (item.key as? String)
+                ?? ""
+            guard !description.isEmpty else { continue }
+
+            let isGain = ReplayGain.isTrackGainKey(description)
+            let isPeak = ReplayGain.isTrackPeakKey(description)
+            guard isGain || isPeak else { continue }
+
+            guard let value = try? await item.load(.stringValue) else { continue }
+
+            if isGain, gain.trackGainDB == nil {
+                gain.trackGainDB = ReplayGain.parseGain(value)
+            } else if isPeak, gain.trackPeak == nil {
+                gain.trackPeak = ReplayGain.parsePeak(value)
+            }
+        }
+
+        return gain.isEmpty ? nil : gain
     }
 
     /// 收集所有可用元数据格式里的条目。
@@ -62,6 +107,7 @@ public enum MetadataLoader {
             || track.album == nil
             || track.artworkData == nil
             || track.embeddedLyrics == nil
+            || track.replayGain == nil
         guard needsSomething, let tags = FlacMetadata.read(url: track.url) else { return }
 
         // 标题只在 AVFoundation 也没给出时才覆盖 —— 默认值是文件名
@@ -72,6 +118,7 @@ public enum MetadataLoader {
         if track.album == nil { track.album = tags.album }
         if track.artworkData == nil { track.artworkData = tags.artwork }
         if track.embeddedLyrics == nil { track.embeddedLyrics = tags.lyrics }
+        if track.replayGain == nil, !tags.replayGain.isEmpty { track.replayGain = tags.replayGain }
     }
 
     private static func applyCommonMetadata(_ items: [AVMetadataItem], to track: inout Track) async {

@@ -11,6 +11,8 @@ public enum Preferences {
         static let sortAscending = "sortAscending"
         static let backgroundOpacity = "backgroundOpacity"
         static let nowPlayingLayout = "nowPlayingLayout"
+        static let replayGainEnabled = "replayGainEnabled"
+        static let sampleRateMatchingEnabled = "sampleRateMatchingEnabled"
     }
 
     /// 背景不透明度下限。再低文字就浮在桌面上没法看了。
@@ -55,6 +57,21 @@ public enum Preferences {
             return defaults.bool(forKey: Key.sortAscending)
         }
         set { defaults.set(newValue, forKey: Key.sortAscending) }
+    }
+
+    /// 默认开启：有标签就用，没标签的文件本来也不受影响。
+    public static var replayGainEnabled: Bool {
+        get {
+            guard defaults.object(forKey: Key.replayGainEnabled) != nil else { return true }
+            return defaults.bool(forKey: Key.replayGainEnabled)
+        }
+        set { defaults.set(newValue, forKey: Key.replayGainEnabled) }
+    }
+
+    /// 默认关闭：它改的是系统级设置，会影响其他 App，且与无缝播放冲突。
+    public static var sampleRateMatchingEnabled: Bool {
+        get { defaults.bool(forKey: Key.sampleRateMatchingEnabled) }
+        set { defaults.set(newValue, forKey: Key.sampleRateMatchingEnabled) }
     }
 
     public static var nowPlayingLayout: NowPlayingLayout {

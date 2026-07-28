@@ -15,6 +15,10 @@ public struct Track: Identifiable, Hashable {
     public var artworkData: Data?
     /// 音频文件内嵌的歌词文本（未解析）。
     public var embeddedLyrics: String?
+    /// 音量归一化信息。文件没打标签时为 nil。
+    public var replayGain: ReplayGain?
+    /// 音频采样率（Hz）。用于把输出设备切到同一采样率，避免系统重采样。
+    public var sampleRate: Double?
     /// 元数据是否已异步加载完成。
     public var metadataLoaded: Bool
 
@@ -26,6 +30,8 @@ public struct Track: Identifiable, Hashable {
         self.duration = 0
         self.artworkData = nil
         self.embeddedLyrics = nil
+        self.replayGain = nil
+        self.sampleRate = nil
         self.metadataLoaded = false
     }
 

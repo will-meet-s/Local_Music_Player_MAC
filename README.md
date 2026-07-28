@@ -11,6 +11,9 @@
 - 记住上次的文件夹、播放模式和音量，下次启动自动恢复
 - 顶部状态栏常驻控制板：当前曲目 + 上一首 / 播放暂停 / 下一首 + 播放顺序
 - 搜索（歌名 / 歌手 / 专辑）与排序（文件顺序 / 歌曲名 / 歌手名，可升降序）
+- **无缝切歌**（gapless）：提前缓冲下一首，曲目之间没有空白
+- **音量归一化**（ReplayGain）：自动补偿不同文件的响度差异
+- **匹配输出采样率**（可选）：避免系统重采样
 - 磨砂半透明窗口背景（`NSVisualEffectView`，能透出桌面），不透明度可调
 - 右侧区域三种展示模式：封面 + 歌词 / 只看封面 / 只看歌词
 
@@ -43,6 +46,40 @@
   换成 `.hudWindow`（更暗）、`.sidebar`（更通透）、`.contentBackground`（几乎不透）
 - 完全关掉：把 `ContentView` 上的 `.frostedBackground()` 和 `TrackListView` 上的
   `.background(VisualEffectView(material: .sidebar))` 两行删掉即可
+
+## 音频处理
+
+顶部标题栏右侧的滑块图标 → 设置面板。
+
+### 无缝切歌（始终开启）
+
+播放引擎用 `AVQueuePlayer`，当前曲开始播放后立刻把下一首插入队列缓冲，播完自动推进，
+中间没有加载空档。听现场专辑、古典、或任何连续编排的专辑时差别明显。
+
+有一个例外：**随机模式每轮的最后一次切歌不是无缝的**。下一轮的随机顺序要到真正翻页时
+才洗出来，预加载阶段无从得知，只能退回普通加载。
+
+### 音量归一化（默认开启）
+
+读文件里的 `REPLAYGAIN_TRACK_GAIN` / `REPLAYGAIN_TRACK_PEAK` 标签，自动补偿响度差异，
+解决「一首听着刚好、下一首震耳朵」。
+
+- 只用**曲目级**增益，不用专辑级 —— 随机播放是常态，专辑级只在整张连听时才正确
+- 用 `AVAudioMix` 施加增益而非 `player.volume`：后者上限是 1，无法为偏轻的曲目提升音量，
+  而且那是用户的音量旋钮，两者必须分开
+- 已知峰值时会保证补偿后不削波（`peak × factor ≤ 1`）
+- 增益系数钳制在 0.05–4 倍，标签写错不至于炸耳朵
+- **没打标签的文件不受任何影响**。FLAC 的标签由自研解析器读取，mp3 走 ID3 的 TXXX 帧
+
+### 匹配输出采样率（默认关闭）
+
+把系统输出设备切到与当前文件相同的采样率，避免 CoreAudio 重采样。
+
+必须清楚两点，所以默认关闭：
+
+- 这是**系统级**设置，会影响所有正在出声的 App，切换瞬间可能有轻微爆音
+- 与无缝播放冲突 —— 相邻曲目采样率不同时，设备切换会带来明显停顿
+- 只有接了像样的 DAC / 耳放才可能听出差别；蓝牙耳机和内置扬声器上基本是心理作用
 
 ## 搜索与排序
 
@@ -173,7 +210,8 @@ Sources/
     Library/            LibraryScanner（扫描）、MetadataLoader（元数据）、FlacMetadata（Vorbis Comment）
                         TrackFilter（搜索 + 排序）
     Lyrics/             LRCParser（解析）、LyricsProvider（查找）
-    Playback/           PlaybackQueue（顺序逻辑）、PlayerEngine（AVPlayer 封装）
+    Playback/           PlaybackQueue（顺序逻辑）、PlayerEngine（AVQueuePlayer 无缝播放）
+                        ReplayGain（音量归一化）、AudioDeviceManager（CoreAudio 采样率）
     ViewModel/          PlayerViewModel（UI 唯一数据源）
     Views/              ContentView / TrackListView / NowPlayingView / LyricsView / ControlsBar
                         MenuBarPanel（状态栏控制板）、LayoutThumbnail（布局切换缩略图）

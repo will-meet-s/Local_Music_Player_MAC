@@ -73,9 +73,9 @@ private struct HeaderBar: View {
             Button {
                 showingAppearance.toggle()
             } label: {
-                Image(systemName: "circle.lefthalf.filled")
+                Image(systemName: "slider.horizontal.3")
             }
-            .help("背景透明度")
+            .help("设置")
             .popover(isPresented: $showingAppearance, arrowEdge: .bottom) {
                 AppearancePopover()
                     .environmentObject(vm)
@@ -86,17 +86,54 @@ private struct HeaderBar: View {
     }
 }
 
-/// 背景磨砂层的不透明度调节。
-///
-/// 调的只是背景 —— 文字和控件始终 100% 不透明，所以拉到最低也还能看清。
+/// 设置面板：音频处理 + 外观。
 private struct AppearancePopover: View {
     @EnvironmentObject private var vm: PlayerViewModel
 
     var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            audioSection
+            Divider()
+            appearanceSection
+        }
+        .padding(14)
+        .frame(width: 300)
+    }
+
+    private var audioSection: some View {
         VStack(alignment: .leading, spacing: 10) {
+            Text("音频")
+                .font(.callout.weight(.semibold))
+
+            Toggle(isOn: $vm.replayGainEnabled) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("音量归一化")
+                    Text("按文件里的 ReplayGain 标签补偿响度差异。没打标签的文件不受影响。")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+
+            Toggle(isOn: $vm.sampleRateMatchingEnabled) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("匹配输出采样率")
+                    Text("把系统输出设备切到与文件相同的采样率，避免重采样。会影响其他 App，"
+                         + "且相邻曲目采样率不同时切歌会有停顿。")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+        }
+    }
+
+    /// 调的只是背景 —— 文字和控件始终 100% 不透明，所以拉到最低也还能看清。
+    private var appearanceSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
             HStack {
                 Text("背景不透明度")
-                    .font(.callout.weight(.medium))
+                    .font(.callout.weight(.semibold))
                 Spacer()
                 Text("\(Int((vm.backgroundOpacity * 100).rounded()))%")
                     .font(.callout.monospacedDigit())
@@ -124,8 +161,6 @@ private struct AppearancePopover: View {
                 .font(.caption)
             }
         }
-        .padding(14)
-        .frame(width: 260)
     }
 }
 

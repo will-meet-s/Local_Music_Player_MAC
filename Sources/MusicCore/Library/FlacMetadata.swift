@@ -17,11 +17,13 @@ public enum FlacMetadata {
         public var album: String?
         public var lyrics: String?
         public var artwork: Data?
+        public var replayGain = ReplayGain()
 
         public init() {}
 
         public var isEmpty: Bool {
-            title == nil && artist == nil && album == nil && lyrics == nil && artwork == nil
+            title == nil && artist == nil && album == nil
+                && lyrics == nil && artwork == nil && replayGain.isEmpty
         }
     }
 
@@ -124,6 +126,10 @@ public enum FlacMetadata {
             default:
                 if tags.lyrics == nil, lyricsKeys.contains(key) {
                     tags.lyrics = value
+                } else if ReplayGain.isTrackGainKey(key), tags.replayGain.trackGainDB == nil {
+                    tags.replayGain.trackGainDB = ReplayGain.parseGain(value)
+                } else if ReplayGain.isTrackPeakKey(key), tags.replayGain.trackPeak == nil {
+                    tags.replayGain.trackPeak = ReplayGain.parsePeak(value)
                 }
             }
         }
