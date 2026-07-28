@@ -32,6 +32,30 @@ xcode-select -p                                                      # 确认
 sudo xcode-select -s /Applications/Xcode.app/Contents/Developer      # 切到 Xcode
 ```
 
+## App 图标
+
+图标源图是 `Resources/AppIcon.png`（1024×1024）。`make app` 会自动把它转成 `.icns` 并打进
+bundle，无需手动操作。
+
+**换成自己的图标**：用一张 1024×1024 的 PNG 覆盖 `Resources/AppIcon.png`，然后
+
+```bash
+rm -f Resources/AppIcon.icns   # 强制重新生成
+make app
+```
+
+**重新生成默认图标**（紫粉渐变 + 八分音符）：
+
+```bash
+python3 scripts/generate-icon.py     # 需要 pip install Pillow
+```
+
+改完图标后 Finder / Dock 可能还显示旧图标 —— 那是图标缓存，重启 Dock 即可：
+
+```bash
+killall Dock
+```
+
 ## 分发
 
 `make dmg` 产出的磁盘映像装载后是「App 图标 + Applications 快捷方式」的拖拽安装界面。

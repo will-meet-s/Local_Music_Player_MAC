@@ -6,8 +6,10 @@ BUILD_DIR   := $(shell swift build -c $(CONFIG) --show-bin-path 2>/dev/null)
 APP_BUNDLE  := build/$(APP_NAME).app
 DMG_STAGING := build/dmg-staging
 DMG_PATH    := build/$(APP_NAME)-$(VERSION).dmg
+ICON_PNG    := Resources/AppIcon.png
+ICON_ICNS   := Resources/AppIcon.icns
 
-.PHONY: all build test app run dmg clean
+.PHONY: all build test app run dmg icon clean
 
 all: app
 
@@ -17,12 +19,19 @@ build:
 test:
 	swift test
 
+## 由 1024x1024 的 PNG 生成 .icns。PNG 更新后会自动重新生成。
+$(ICON_ICNS): $(ICON_PNG)
+	@bash scripts/make-icon.sh
+
+icon: $(ICON_ICNS)
+
 ## 打包成可双击运行的 .app（无需 Xcode 工程文件）
-app: build
+app: build icon
 	@rm -rf "$(APP_BUNDLE)"
 	@mkdir -p "$(APP_BUNDLE)/Contents/MacOS"
 	@mkdir -p "$(APP_BUNDLE)/Contents/Resources"
 	@cp "$(BUILD_DIR)/$(APP_NAME)" "$(APP_BUNDLE)/Contents/MacOS/$(APP_NAME)"
+	@cp "$(ICON_ICNS)" "$(APP_BUNDLE)/Contents/Resources/AppIcon.icns"
 	@printf '%s\n' \
 		'<?xml version="1.0" encoding="UTF-8"?>' \
 		'<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">' \
@@ -32,6 +41,8 @@ app: build
 		'  <key>CFBundleDisplayName</key><string>音乐播放器</string>' \
 		'  <key>CFBundleIdentifier</key><string>$(BUNDLE_ID)</string>' \
 		'  <key>CFBundleExecutable</key><string>$(APP_NAME)</string>' \
+		'  <key>CFBundleIconFile</key><string>AppIcon</string>' \
+		'  <key>CFBundleIconName</key><string>AppIcon</string>' \
 		'  <key>CFBundlePackageType</key><string>APPL</string>' \
 		'  <key>CFBundleShortVersionString</key><string>$(VERSION)</string>' \
 		'  <key>CFBundleVersion</key><string>$(VERSION)</string>' \
