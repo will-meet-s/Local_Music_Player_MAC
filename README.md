@@ -16,7 +16,8 @@
 
 ## 展示模式
 
-**点击右侧区域任意位置**即可循环切换三种模式，也可用 `⌘1` / `⌘2` / `⌘3` 直接跳到指定模式：
+右侧区域**右上角浮着一个小方块**，里面是当前布局的缩略示意图，点一下循环切换到下一种模式。
+也可用 `⌘1` / `⌘2` / `⌘3` 直接跳到指定模式：
 
 | 模式 | 内容 |
 |---|---|
@@ -26,8 +27,8 @@
 
 选择会被记住，下次启动沿用。
 
-歌词行本身不响应点击（不支持点歌词跳播）—— 整块区域的点击已用于切换模式，
-「只看歌词」时整区都是歌词，行内手势会把切换挡死。
+切换入口做成右上角的浮动小方块、而不是让整块区域响应点击，是为了不和歌词行的
+**点击跳播**抢手势 —— 点歌词任意一行可跳播到该行。
 
 ## 外观
 
@@ -187,7 +188,8 @@ Sources/
     Playback/           PlaybackQueue（顺序逻辑）、PlayerEngine（AVPlayer 封装）
     ViewModel/          PlayerViewModel（UI 唯一数据源）
     Views/              ContentView / TrackListView / NowPlayingView / LyricsView / ControlsBar
-                        MenuBarPanel（状态栏控制板）
+                        MenuBarPanel（状态栏控制板）、LayoutThumbnail（布局切换缩略图）
+                        VisualEffect（磨砂背景桥接）
     Support/            Preferences（UserDefaults）、TimeFormat
 Tests/MusicCoreTests/   LRCParser / PlaybackQueue / LibraryScanner / LyricsProvider 单测
 docs/superpowers/specs/ 设计文档

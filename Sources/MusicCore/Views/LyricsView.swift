@@ -48,8 +48,12 @@ struct LyricsView: View {
             .frame(maxWidth: .infinity)
             .scaleEffect(isCurrent ? 1.06 : 1.0)
             .animation(.easeInOut(duration: 0.2), value: isCurrent)
-        // 这里不再挂点击手势：整块区域的点击用于切换展示模式，
-        // 「只看歌词」时整区都是歌词，行内手势会把切换彻底挡住。
+            .onTapGesture {
+                // 点歌词跳播到该行
+                if vm.lyricsAreSynced && line.time >= 0 {
+                    vm.seek(to: line.time)
+                }
+            }
     }
 
     private var placeholder: some View {

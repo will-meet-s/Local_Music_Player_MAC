@@ -18,12 +18,11 @@ struct NowPlayingView: View {
         }
         .padding(20)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        // 让空白处也能接收点击，否则只有文字和图片本身可点
-        .contentShape(Rectangle())
-        .onTapGesture {
-            vm.cycleNowPlayingLayout()
+        // 浮在右上角，不占布局空间 —— 整块区域的点击要留给歌词跳播
+        .overlay(alignment: .topTrailing) {
+            LayoutThumbnailButton()
+                .padding(10)
         }
-        .help("点击切换展示模式：\(vm.nowPlayingLayout.next.displayName)")
         .animation(.easeInOut(duration: 0.2), value: vm.nowPlayingLayout)
     }
 
