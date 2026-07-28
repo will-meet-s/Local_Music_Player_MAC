@@ -1,6 +1,6 @@
 # MacMusicPlayer
 
-一个给 Apple Silicon Mac（M4）用的本地音乐播放器。SwiftUI + AVFoundation，零第三方依赖，不联网。
+一个给 Apple Silicon Mac 用的本地音乐播放器。SwiftUI + AVFoundation，零第三方依赖，不联网。
 
 ## 功能
 
