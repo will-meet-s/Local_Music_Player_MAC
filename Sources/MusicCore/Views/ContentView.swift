@@ -54,14 +54,11 @@ private struct HeaderBar: View {
 
             Spacer()
 
+            // 曲目数显示在列表工具条里，这里只留扫描进度
             if vm.isScanning {
                 ProgressView()
                     .controlSize(.small)
                 Text("扫描中…")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-            } else if !vm.tracks.isEmpty {
-                Text("\(vm.tracks.count) 首")
                     .font(.callout)
                     .foregroundStyle(.secondary)
             }

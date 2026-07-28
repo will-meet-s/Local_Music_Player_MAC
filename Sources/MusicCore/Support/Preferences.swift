@@ -7,6 +7,8 @@ public enum Preferences {
         static let lastFolderPath = "lastFolderPath"
         static let playMode = "playMode"
         static let volume = "volume"
+        static let sortOrder = "sortOrder"
+        static let sortAscending = "sortAscending"
     }
 
     private static var defaults: UserDefaults { .standard }
@@ -32,6 +34,22 @@ public enum Preferences {
             return PlayMode(rawValue: raw) ?? .sequential
         }
         set { defaults.set(newValue.rawValue, forKey: Key.playMode) }
+    }
+
+    public static var sortOrder: TrackSortOrder {
+        get {
+            guard let raw = defaults.string(forKey: Key.sortOrder) else { return .fileOrder }
+            return TrackSortOrder(rawValue: raw) ?? .fileOrder
+        }
+        set { defaults.set(newValue.rawValue, forKey: Key.sortOrder) }
+    }
+
+    public static var sortAscending: Bool {
+        get {
+            guard defaults.object(forKey: Key.sortAscending) != nil else { return true }
+            return defaults.bool(forKey: Key.sortAscending)
+        }
+        set { defaults.set(newValue, forKey: Key.sortAscending) }
     }
 
     public static var volume: Double {

@@ -3,18 +3,57 @@ import SwiftUI
 import AppKit
 
 /// UI 的唯一数据源：串联扫描、元数据、歌词、播放队列与播放引擎。
+///
+/// 曲库有两份：`library` 是扫描出来的全量（文件顺序，不动），`tracks` 是经过
+/// 搜索过滤与排序后**实际展示和播放**的列表。播放队列按 `tracks` 的下标工作，
+/// 所以排序或搜索一变，队列必须跟着重建 —— 这件事统一在 `rebuildDisplayed()` 里做。
 @MainActor
 public final class PlayerViewModel: ObservableObject {
 
     // MARK: - 曲库
 
+    /// 扫描得到的全量曲库，保持文件顺序。
+    @Published public private(set) var library: [Track] = []
+    /// 过滤 + 排序后的列表。UI 展示与播放队列都以它为准。
     @Published public private(set) var tracks: [Track] = []
     @Published public private(set) var folderURL: URL?
     @Published public private(set) var isScanning = false
 
+    // MARK: - 搜索与排序
+
+    @Published public var searchText: String = "" {
+        didSet {
+            guard oldValue != searchText else { return }
+            rebuildDisplayed()
+        }
+    }
+
+    @Published public var sortOrder: TrackSortOrder {
+        didSet {
+            guard oldValue != sortOrder else { return }
+            Preferences.sortOrder = sortOrder
+            rebuildDisplayed()
+        }
+    }
+
+    @Published public var sortAscending: Bool {
+        didSet {
+            guard oldValue != sortAscending else { return }
+            Preferences.sortAscending = sortAscending
+            rebuildDisplayed()
+        }
+    }
+
+    public var isFiltering: Bool {
+        !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
     // MARK: - 播放状态
 
+    /// 当前曲目在 `tracks` 里的下标。被搜索过滤掉时为 nil（歌照放，只是列表里没有它）。
     @Published public private(set) var currentIndex: Int?
+    /// 正在播放的曲目本身。不受过滤影响，右侧「正在播放」区读这个。
+    @Published public private(set) var playingTrack: Track?
     @Published public private(set) var isPlaying = false
     @Published public private(set) var currentTime: Double = 0
     @Published public private(set) var duration: Double = 0
@@ -52,16 +91,15 @@ public final class PlayerViewModel: ObservableObject {
     /// 连续播放失败次数。用来避免整目录都是坏文件时无限自动跳曲。
     private var consecutiveFailures = 0
 
-    public var currentTrack: Track? {
-        guard let i = currentIndex, tracks.indices.contains(i) else { return nil }
-        return tracks[i]
-    }
+    public var currentTrack: Track? { playingTrack }
 
     public init() {
         let mode = Preferences.playMode
         let vol = Preferences.volume
         self.playMode = mode
         self.volume = vol
+        self.sortOrder = Preferences.sortOrder
+        self.sortAscending = Preferences.sortAscending
         self.queue = PlaybackQueue(count: 0, mode: mode)
 
         engine.volume = vol
@@ -100,6 +138,7 @@ public final class PlayerViewModel: ObservableObject {
         Preferences.lastFolder = folder
 
         currentIndex = nil
+        playingTrack = nil
         currentTime = 0
         duration = 0
         lyrics = []
@@ -107,17 +146,19 @@ public final class PlayerViewModel: ObservableObject {
         isPlaying = false
         isScanning = true
         consecutiveFailures = 0
+        // 换了曲库，旧关键词多半一条都匹配不上，留着只会看到空列表
+        searchText = ""
 
         Task {
             let urls = await Task.detached(priority: .userInitiated) {
                 LibraryScanner.scan(directory: folder)
             }.value
 
-            self.tracks = urls.map(Track.init(url:))
-            self.queue.setCount(self.tracks.count)
+            self.library = urls.map(Track.init(url:))
+            self.rebuildDisplayed()
             self.isScanning = false
 
-            if self.tracks.isEmpty {
+            if self.library.isEmpty {
                 self.errorMessage = "该文件夹下没有找到受支持的音频文件"
             }
 
@@ -125,27 +166,78 @@ public final class PlayerViewModel: ObservableObject {
         }
     }
 
-    /// 逐个补全元数据。就地更新，不改变列表顺序，因此不会打断用户操作。
+    /// 逐个补全元数据。
+    ///
+    /// 加载过程中只就地更新条目、不重排 —— 否则用户正在看的列表会随着元数据到位
+    /// 不断跳动。全部加载完再统一重排一次。
     private func loadMetadataInBackground() {
         metadataTask = Task { [weak self] in
             guard let self else { return }
-            let snapshot = self.tracks
+            let snapshot = self.library
+
             for (index, track) in snapshot.enumerated() {
                 if Task.isCancelled { return }
                 let loaded = await MetadataLoader.load(url: track.url)
 
-                // 列表可能已被重新扫描，按 URL 校验后再写回。
-                guard self.tracks.indices.contains(index),
-                      self.tracks[index].url == loaded.url else { continue }
-                self.tracks[index] = loaded
+                // 列表可能已被重新扫描，按 URL 校验后再写回
+                guard self.library.indices.contains(index),
+                      self.library[index].url == loaded.url else { continue }
+                self.library[index] = loaded
+                self.applyLoadedMetadataToDisplayed(loaded)
+            }
 
-                // 正在播放的这首元数据到位后，补一次歌词与时长。
-                if self.currentIndex == index {
-                    self.refreshLyrics(for: loaded)
-                    if self.duration == 0 { self.duration = loaded.duration }
-                }
+            if Task.isCancelled { return }
+            // 标题 / 歌手到位后，按这两个维度排序的结果才是对的
+            if self.sortOrder != .fileOrder {
+                self.rebuildDisplayed()
             }
         }
+    }
+
+    /// 把刚加载好的元数据同步到展示列表和「正在播放」，不改变顺序。
+    private func applyLoadedMetadataToDisplayed(_ loaded: Track) {
+        if let i = tracks.firstIndex(where: { $0.url == loaded.url }) {
+            tracks[i] = loaded
+        }
+
+        guard playingTrack?.url == loaded.url else { return }
+        playingTrack = loaded
+        refreshLyrics(for: loaded)
+        if duration == 0 { duration = loaded.duration }
+    }
+
+    // MARK: - 搜索与排序
+
+    /// 重建展示列表并让播放队列跟上。
+    ///
+    /// 正在播放的曲目若仍在新列表里，就把队列位置对齐到它，播放不受影响；
+    /// 若被过滤掉了，歌继续放，但列表中没有高亮项，此时按「下一首」会从列表头开始。
+    private func rebuildDisplayed() {
+        tracks = TrackFilter.apply(
+            to: library,
+            search: searchText,
+            sort: sortOrder,
+            ascending: sortAscending
+        )
+
+        queue.setCount(tracks.count)
+
+        if let playingURL = playingTrack?.url,
+           let index = tracks.firstIndex(where: { $0.url == playingURL }) {
+            queue.select(index)
+            currentIndex = index
+        } else {
+            queue.clearSelection()
+            currentIndex = nil
+        }
+    }
+
+    public func clearSearch() {
+        searchText = ""
+    }
+
+    public func toggleSortDirection() {
+        sortAscending.toggle()
     }
 
     // MARK: - 播放控制
@@ -157,10 +249,9 @@ public final class PlayerViewModel: ObservableObject {
     }
 
     public func togglePlayPause() {
-        if currentIndex == nil {
+        if playingTrack == nil {
             // 还没选歌时，播放键等同于从头开始
-            if let first = queue.next(auto: false) {
-                queue.select(first)
+            if queue.next(auto: false) != nil {
                 startCurrent()
             }
             return
@@ -181,7 +272,7 @@ public final class PlayerViewModel: ObservableObject {
     }
 
     public func previousTrack() {
-        // 播放超过 3 秒时，「上一首」先回到本曲开头，符合常见播放器习惯。
+        // 播放超过 3 秒时，「上一首」先回到本曲开头，符合常见播放器习惯
         if currentTime > 3 {
             seek(to: 0)
             return
@@ -221,6 +312,7 @@ public final class PlayerViewModel: ObservableObject {
         let track = tracks[index]
 
         currentIndex = index
+        playingTrack = track
         currentTime = 0
         duration = track.duration
         refreshLyrics(for: track)
@@ -259,6 +351,7 @@ public final class PlayerViewModel: ObservableObject {
                 self.errorMessage = "列表中的音频都无法播放，已停止"
                 self.engine.unload()
                 self.currentIndex = nil
+                self.playingTrack = nil
                 return
             }
             self.advance(auto: false)
@@ -269,8 +362,12 @@ public final class PlayerViewModel: ObservableObject {
             // 能拿到时长说明这首已经 readyToPlay，失败计数清零
             self.consecutiveFailures = 0
             self.duration = seconds
+
             if let i = self.currentIndex, self.tracks.indices.contains(i), self.tracks[i].duration == 0 {
                 self.tracks[i].duration = seconds
+            }
+            if self.playingTrack?.duration == 0 {
+                self.playingTrack?.duration = seconds
             }
         }
     }

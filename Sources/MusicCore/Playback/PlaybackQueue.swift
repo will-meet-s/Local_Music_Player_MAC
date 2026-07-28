@@ -36,6 +36,14 @@ public struct PlaybackQueue {
         rebuildOrder()
     }
 
+    /// 清除当前选中项。列表过滤后当前曲目不在可见范围内时用。
+    ///
+    /// 清除后下一次 `next` 会从顺序表头部重新开始。
+    public mutating func clearSelection() {
+        current = nil
+        position = 0
+    }
+
     /// 用户直接点选某首歌。
     public mutating func select(_ index: Int) {
         guard index >= 0 && index < count else { return }
