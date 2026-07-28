@@ -4,8 +4,10 @@ VERSION     := 1.0.0
 CONFIG      := release
 BUILD_DIR   := $(shell swift build -c $(CONFIG) --show-bin-path 2>/dev/null)
 APP_BUNDLE  := build/$(APP_NAME).app
+DMG_STAGING := build/dmg-staging
+DMG_PATH    := build/$(APP_NAME)-$(VERSION).dmg
 
-.PHONY: all build test app run clean
+.PHONY: all build test app run dmg clean
 
 all: app
 
@@ -45,6 +47,24 @@ app: build
 run: app
 	open "$(APP_BUNDLE)"
 
+## 打包成 .dmg：装载后是「App 图标 + /Applications 快捷方式」的经典拖拽安装界面
+dmg: app
+	@rm -rf "$(DMG_STAGING)" "$(DMG_PATH)"
+	@mkdir -p "$(DMG_STAGING)"
+	@cp -R "$(APP_BUNDLE)" "$(DMG_STAGING)/"
+	@ln -s /Applications "$(DMG_STAGING)/Applications"
+	@hdiutil create \
+		-volname "$(APP_NAME)" \
+		-srcfolder "$(DMG_STAGING)" \
+		-fs HFS+ \
+		-format UDZO \
+		-ov \
+		"$(DMG_PATH)" >/dev/null
+	@rm -rf "$(DMG_STAGING)"
+	@echo "已生成 $(DMG_PATH)"
+	@echo "注意：未经开发者证书签名与公证，别的 Mac 打开时会被 Gatekeeper 拦截，"
+	@echo "      对方需执行：xattr -dr com.apple.quarantine /Applications/$(APP_NAME).app"
+
 clean:
 	swift package clean
-	rm -rf build .build
+	rm -rf build .build $(DMG_STAGING)

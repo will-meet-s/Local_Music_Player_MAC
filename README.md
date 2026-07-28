@@ -19,9 +19,38 @@ macOS 14+，Xcode 15+（或 Swift 5.9+ 命令行工具）。
 ```bash
 cd MacMusicPlayer
 
-swift test          # 跑单元测试
+swift test          # 跑单元测试（需要完整版 Xcode，XCTest 不随 Command Line Tools 提供）
 make app            # 生成 build/MacMusicPlayer.app
 make run            # 构建并启动
+make dmg            # 生成 build/MacMusicPlayer-1.0.0.dmg
+```
+
+`swift test` 报 `no such module 'XCTest'` 时，说明 `xcode-select` 指向了 Command Line Tools：
+
+```bash
+xcode-select -p                                                      # 确认
+sudo xcode-select -s /Applications/Xcode.app/Contents/Developer      # 切到 Xcode
+```
+
+## 分发
+
+`make dmg` 产出的磁盘映像装载后是「App 图标 + Applications 快捷方式」的拖拽安装界面。
+
+映像只做了 ad-hoc 签名，没有开发者证书和公证，因此**在别人的 Mac 上会被 Gatekeeper 拦截**。
+对方拖进 `/Applications` 后需要执行一次：
+
+```bash
+xattr -dr com.apple.quarantine /Applications/MacMusicPlayer.app
+```
+
+想免掉这一步就得加入 Apple Developer Program（$99/年），用 Developer ID 证书签名并公证：
+
+```bash
+codesign --force --deep --options runtime --timestamp \
+  --sign "Developer ID Application: 你的名字 (TEAMID)" build/MacMusicPlayer.app
+xcrun notarytool submit build/MacMusicPlayer-1.0.0.dmg \
+  --apple-id you@example.com --team-id TEAMID --password <app-专用密码> --wait
+xcrun stapler staple build/MacMusicPlayer-1.0.0.dmg
 ```
 
 也可以直接 `open Package.swift` 用 Xcode 打开，选 `MacMusicPlayer` scheme 运行。
