@@ -54,6 +54,8 @@ public final class PlayerViewModel: ObservableObject {
     @Published public private(set) var currentIndex: Int?
     /// 正在播放的曲目本身。不受过滤影响，右侧「正在播放」区读这个。
     @Published public private(set) var playingTrack: Track?
+    /// 正在播的文件已不在曲库中（被删除或移走）。歌还能放完，但列表里没有它了。
+    @Published public private(set) var playingTrackMissing = false
     @Published public private(set) var isPlaying = false
     @Published public private(set) var currentTime: Double = 0
     @Published public private(set) var duration: Double = 0
@@ -186,6 +188,7 @@ public final class PlayerViewModel: ObservableObject {
 
         currentIndex = nil
         playingTrack = nil
+        playingTrackMissing = false
         currentTime = 0
         duration = 0
         lyrics = []
@@ -280,6 +283,9 @@ public final class PlayerViewModel: ObservableObject {
     /// 正在播放的曲目若仍在新列表里，就把队列位置对齐到它，播放不受影响；
     /// 若被过滤掉了，歌继续放，但列表中没有高亮项，此时按「下一首」会从列表头开始。
     private func rebuildDisplayed() {
+        // 先记住当前曲目在旧列表里的序号，它从新列表消失时要靠这个定位
+        let previousIndex = currentIndex
+
         tracks = TrackFilter.apply(
             to: library,
             search: searchText,
@@ -294,12 +300,32 @@ public final class PlayerViewModel: ObservableObject {
             queue.select(index)
             currentIndex = index
         } else {
-            queue.clearSelection()
+            // 当前曲目不在新列表里：可能是文件被删了，也可能只是被搜索过滤掉。
+            // 停靠在它原来的序号上，播完从那个位置接着走，而不是跳回列表开头。
+            if let previousIndex {
+                queue.park(at: previousIndex)
+            } else {
+                queue.clearSelection()
+            }
             currentIndex = nil
         }
 
+        updatePlayingTrackMissing()
+
         // 列表变了，预判的「下一首」可能已经不对
         engine.invalidatePreload()
+    }
+
+    /// 正在播的曲目是否已经不在曲库里。
+    ///
+    /// 判据是**曲库**而不是展示列表 —— 被搜索过滤掉不等于文件没了，
+    /// 只有重扫后曲库里都找不到，才说明文件真的被删除或移走了。
+    private func updatePlayingTrackMissing() {
+        guard let url = playingTrack?.url else {
+            playingTrackMissing = false
+            return
+        }
+        playingTrackMissing = !library.contains { $0.url == url }
     }
 
     public func clearSearch() {
@@ -381,6 +407,7 @@ public final class PlayerViewModel: ObservableObject {
 
         currentIndex = index
         playingTrack = track
+        playingTrackMissing = false
         currentTime = 0
         duration = track.duration
         refreshLyrics(for: track)
@@ -415,6 +442,7 @@ public final class PlayerViewModel: ObservableObject {
         refreshLyrics(for: track)
         isPlaying = true
         consecutiveFailures = 0
+        updatePlayingTrackMissing()
     }
 
     /// 组装引擎需要的播放条目：URL + 归一化增益 + 采样率。

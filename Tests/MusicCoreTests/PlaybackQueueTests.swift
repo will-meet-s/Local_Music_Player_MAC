@@ -219,6 +219,86 @@ final class PlaybackQueueTests: XCTestCase {
         XCTAssertEqual(q.next(auto: false), 0, "清除后应从头开始")
     }
 
+    // MARK: - park（当前曲目从列表消失）
+
+    func testParkResumesFromSamePosition() {
+        // 100 首里正在播第 80 首（下标 79），它被删了，还剩 99 首
+        var q = PlaybackQueue(count: 100, mode: .sequential)
+        q.select(79)
+
+        q.setCount(99)
+        q.park(at: 79)
+
+        XCTAssertNil(q.current, "没有选中项")
+        XCTAssertEqual(q.peekNext(auto: true), 79, "应从原来的序号继续，而不是跳回开头")
+        XCTAssertEqual(q.next(auto: true), 79)
+    }
+
+    func testParkBeyondNewEndStopsInSequentialMode() {
+        // 100 首里正在播第 80 首，删到只剩 50 首 —— 原位置已经超出列表末尾
+        var q = PlaybackQueue(count: 100, mode: .sequential)
+        q.select(79)
+
+        q.setCount(50)
+        q.park(at: 79)
+
+        XCTAssertNil(q.peekNext(auto: true), "顺序播放：等同于播到了结尾，应停止")
+        XCTAssertNil(q.next(auto: true))
+    }
+
+    func testParkBeyondNewEndWrapsInRepeatAll() {
+        var q = PlaybackQueue(count: 100, mode: .repeatAll)
+        q.select(79)
+
+        q.setCount(50)
+        q.park(at: 79)
+
+        XCTAssertEqual(q.peekNext(auto: true), 0, "列表循环：等同播到结尾，回到第一首")
+        XCTAssertEqual(q.next(auto: true), 0)
+    }
+
+    func testParkIsConsumedAfterUse() {
+        var q = PlaybackQueue(count: 10, mode: .sequential)
+        q.park(at: 4)
+
+        XCTAssertEqual(q.next(auto: true), 4)
+        XCTAssertEqual(q.next(auto: true), 5, "用过一次之后就回到正常推进")
+    }
+
+    func testSelectClearsPark() {
+        var q = PlaybackQueue(count: 10, mode: .sequential)
+        q.park(at: 7)
+
+        q.select(2)
+
+        XCTAssertEqual(q.current, 2)
+        XCTAssertEqual(q.next(auto: true), 3, "点选之后停靠点应失效")
+    }
+
+    func testClearSelectionClearsPark() {
+        var q = PlaybackQueue(count: 10, mode: .sequential)
+        q.park(at: 7)
+
+        q.clearSelection()
+
+        XCTAssertEqual(q.next(auto: true), 0)
+    }
+
+    func testParkOnEmptyQueue() {
+        var q = PlaybackQueue(count: 0, mode: .repeatAll)
+        q.park(at: 3)
+
+        XCTAssertNil(q.peekNext(auto: true))
+        XCTAssertNil(q.next(auto: true))
+    }
+
+    func testParkAtNegativeIndexIsTreatedAsHead() {
+        var q = PlaybackQueue(count: 5, mode: .sequential)
+        q.park(at: -3)
+
+        XCTAssertEqual(q.next(auto: true), 0)
+    }
+
     // MARK: - 模式切换
 
     func testChangingModeToSameValueDoesNotResetPosition() {

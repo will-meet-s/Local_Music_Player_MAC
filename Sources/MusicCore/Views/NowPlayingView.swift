@@ -34,6 +34,7 @@ struct NowPlayingView: View {
                 .frame(width: 180, height: 180)
 
             TrackTitleView(track: vm.currentTrack, compact: false)
+            MissingFileNotice()
 
             Divider()
 
@@ -50,6 +51,7 @@ struct NowPlayingView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
 
             TrackTitleView(track: vm.currentTrack, compact: false)
+            MissingFileNotice()
         }
     }
 
@@ -57,11 +59,32 @@ struct NowPlayingView: View {
     private var lyricsOnly: some View {
         VStack(spacing: 10) {
             TrackTitleView(track: vm.currentTrack, compact: true)
+            MissingFileNotice()
 
             Divider()
 
             LyricsView()
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+    }
+}
+
+/// 文件已从曲库消失时的提示。
+///
+/// 这首歌还能放完（文件句柄已经打开），但列表里不再有它，所以要说明白，
+/// 免得以为是被搜索过滤掉了。
+private struct MissingFileNotice: View {
+    @EnvironmentObject private var vm: PlayerViewModel
+
+    var body: some View {
+        if vm.playingTrackMissing {
+            HStack(spacing: 5) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .foregroundStyle(.orange)
+                Text("文件已不在曲库中，本曲仍可播完")
+                    .foregroundStyle(.secondary)
+            }
+            .font(.caption)
         }
     }
 }

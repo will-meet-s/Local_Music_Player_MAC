@@ -20,6 +20,10 @@ public struct PlaybackQueue {
 
     private var order: [Int] = []
     private var position: Int = 0
+    /// 当前曲目从列表里消失后停靠的位置（曲目下标，不是顺序表下标）。
+    ///
+    /// 存曲目下标而不是顺序表位置，是因为顺序表会随排序 / 洗牌重建。
+    private var parkedIndex: Int?
 
     public init(count: Int = 0, mode: PlayMode = .sequential) {
         self.count = count
@@ -36,12 +40,23 @@ public struct PlaybackQueue {
         rebuildOrder()
     }
 
-    /// 清除当前选中项。列表过滤后当前曲目不在可见范围内时用。
-    ///
-    /// 清除后下一次 `next` 会从顺序表头部重新开始。
+    /// 清除当前选中项，下一次 `next` 从顺序表头部重新开始。
     public mutating func clearSelection() {
         current = nil
         position = 0
+        parkedIndex = nil
+    }
+
+    /// 当前曲目从列表中消失（被删除或被搜索过滤）时，把队列停靠在它原来的序号上。
+    ///
+    /// 效果是「没有选中项，但下一次 `next` 会从 `index` 这个位置接着走」——
+    /// 删掉第 300 首之后应该从第 300 位继续，而不是跳回列表开头。
+    /// 停靠点**不**钳制到列表末尾。原位置超出新列表长度，语义就是「已经播过了结尾」，
+    /// 该走结尾逻辑（顺序播放停止 / 循环回到开头），而不是硬拽到最后一首。
+    public mutating func park(at index: Int) {
+        current = nil
+        position = 0
+        parkedIndex = count > 0 ? max(0, index) : nil
     }
 
     /// 用户直接点选某首歌。
@@ -49,6 +64,7 @@ public struct PlaybackQueue {
         guard index >= 0 && index < count else { return }
         current = index
         position = order.firstIndex(of: index) ?? 0
+        parkedIndex = nil
     }
 
     /// 预看下一首是谁，**不改变任何状态**。
@@ -61,7 +77,7 @@ public struct PlaybackQueue {
     /// 代价是每轮有且仅有一次切歌拿不到无缝。
     public func peekNext(auto: Bool) -> Int? {
         guard count > 0 else { return nil }
-        guard let c = current else { return order.first }
+        guard let c = current else { return parkedTarget }
 
         if auto && mode == .repeatOne { return c }
 
@@ -114,10 +130,26 @@ public struct PlaybackQueue {
         return current
     }
 
+    /// 没有选中项时该从哪首开始。
+    ///
+    /// - 有停靠点且仍在列表内 → 就从它开始
+    /// - 有停靠点但已超出列表长度（列表缩短了）→ 等同播到结尾：
+    ///   顺序播放返回 nil（停止），循环 / 随机回到开头
+    /// - 没有停靠点 → 顺序表首项
+    private var parkedTarget: Int? {
+        guard let parkedIndex else { return order.first }
+        if order.contains(parkedIndex) { return parkedIndex }
+        return mode == .sequential ? nil : order.first
+    }
+
     private mutating func selectFirst() -> Int? {
-        guard !order.isEmpty else { return nil }
-        position = 0
-        current = order[0]
+        guard let target = parkedTarget else {
+            parkedIndex = nil
+            return nil
+        }
+        parkedIndex = nil
+        position = order.firstIndex(of: target) ?? 0
+        current = order[position]
         return current
     }
 
