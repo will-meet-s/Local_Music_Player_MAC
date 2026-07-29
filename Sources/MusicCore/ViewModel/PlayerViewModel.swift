@@ -176,7 +176,7 @@ public final class PlayerViewModel: ObservableObject {
         scan(folder: url)
     }
 
-    /// 扫描文件夹。先用文件名秒出列表，再后台补全元数据。
+    /// 切换到新文件夹：停止播放、清空搜索、从零重建曲库。
     public func scan(folder: URL) {
         metadataTask?.cancel()
         engine.unload()
@@ -191,21 +191,39 @@ public final class PlayerViewModel: ObservableObject {
         lyrics = []
         currentLyricIndex = nil
         isPlaying = false
-        isScanning = true
         consecutiveFailures = 0
         // 换了曲库，旧关键词多半一条都匹配不上，留着只会看到空列表
         searchText = ""
+
+        performScan(folder: folder, reportEmpty: true)
+    }
+
+    /// 重新扫描当前文件夹，把新增 / 删除的文件同步进来。
+    ///
+    /// 与 `scan(folder:)` 的区别：**不打断播放**，也不动搜索词和排序。
+    /// 已经读过元数据的文件会原样保留，不重复读盘。
+    public func refreshLibrary() {
+        guard let folder = folderURL, !isScanning else { return }
+        metadataTask?.cancel()
+        performScan(folder: folder, reportEmpty: false)
+    }
+
+    private func performScan(folder: URL, reportEmpty: Bool) {
+        isScanning = true
 
         Task {
             let urls = await Task.detached(priority: .userInitiated) {
                 LibraryScanner.scan(directory: folder)
             }.value
 
-            self.library = urls.map(Track.init(url:))
+            // 复用已有条目，避免重扫时把整库的元数据全部重读一遍
+            let known = Dictionary(self.library.map { ($0.url, $0) }, uniquingKeysWith: { first, _ in first })
+            self.library = urls.map { known[$0] ?? Track(url: $0) }
+
             self.rebuildDisplayed()
             self.isScanning = false
 
-            if self.library.isEmpty {
+            if self.library.isEmpty && reportEmpty {
                 self.errorMessage = "该文件夹下没有找到受支持的音频文件"
             }
 
@@ -224,6 +242,8 @@ public final class PlayerViewModel: ObservableObject {
 
             for (index, track) in snapshot.enumerated() {
                 if Task.isCancelled { return }
+                // 重扫时大部分条目已经读过，跳过它们
+                if track.metadataLoaded { continue }
                 let loaded = await MetadataLoader.load(url: track.url)
 
                 // 列表可能已被重新扫描，按 URL 校验后再写回

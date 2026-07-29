@@ -46,6 +46,14 @@ private struct HeaderBar: View {
             }
 
             if let folder = vm.folderURL {
+                Button {
+                    vm.refreshLibrary()
+                } label: {
+                    Image(systemName: "arrow.clockwise")
+                }
+                .disabled(vm.isScanning)
+                .help("重新扫描该文件夹，同步新增或删除的歌曲（不打断播放）")
+
                 Text(folder.path)
                     .font(.callout)
                     .foregroundStyle(.secondary)

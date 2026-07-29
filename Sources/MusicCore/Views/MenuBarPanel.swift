@@ -51,6 +51,12 @@ public struct MenuBarPanel: View {
 
             Divider()
 
+            Button("刷新曲库") {
+                vm.refreshLibrary()
+            }
+            .buttonStyle(.plain)
+            .disabled(vm.folderURL == nil || vm.isScanning)
+
             Button("显示主窗口") {
                 showMainWindow()
             }
