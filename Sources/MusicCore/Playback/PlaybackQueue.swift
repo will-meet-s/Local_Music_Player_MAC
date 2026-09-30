@@ -67,6 +67,17 @@ public struct PlaybackQueue {
         parkedIndex = nil
     }
 
+    /// 跟随状态下搜索、排序、刷新后重新对齐当前曲目。
+    ///
+    /// 与 `select` 相同，但不清除 `resumeAt`（T-008 引入 `resumeAt` 之后生效；
+    /// 跟随状态没有编辑操作，此刻两者行为一致）。
+    public mutating func realign(_ index: Int) {
+        guard index >= 0 && index < count else { return }
+        current = index
+        position = order.firstIndex(of: index) ?? 0
+        parkedIndex = nil
+    }
+
     /// 预看下一首是谁，**不改变任何状态**。
     ///
     /// 无缝播放需要提前把下一首塞进播放队列缓冲，但那时当前曲还在播，

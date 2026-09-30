@@ -307,4 +307,29 @@ final class PlaybackQueueTests: XCTestCase {
         q.mode = .repeatAll
         XCTAssertEqual(q.next(auto: false), 4)
     }
+
+    // MARK: - realign（T-001：跟随状态下重新对齐当前曲目）
+
+    func testRealignActsLikeSelect() {
+        var q = PlaybackQueue(count: 5, mode: .sequential)
+        q.realign(2)
+        XCTAssertEqual(q.current, 2)
+        XCTAssertEqual(q.next(auto: true), 3)
+    }
+
+    func testRealignOutOfRangeIsIgnored() {
+        var q = PlaybackQueue(count: 3, mode: .sequential)
+        q.realign(99)
+        XCTAssertNil(q.current)
+    }
+
+    func testRealignClearsExistingPark() {
+        var q = PlaybackQueue(count: 10, mode: .sequential)
+        q.park(at: 7)
+
+        q.realign(2)
+
+        XCTAssertEqual(q.current, 2)
+        XCTAssertEqual(q.next(auto: true), 3, "重新对齐后旧的停靠点应失效")
+    }
 }

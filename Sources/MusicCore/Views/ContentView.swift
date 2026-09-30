@@ -16,7 +16,7 @@ public struct ContentView: View {
             }
 
             HSplitView {
-                TrackListView()
+                LeftPaneView()
                     .frame(minWidth: 260, idealWidth: 320, maxWidth: 460)
                 NowPlayingView()
                     .frame(minWidth: 360, maxWidth: .infinity)

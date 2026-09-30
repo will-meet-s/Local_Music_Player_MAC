@@ -5,8 +5,9 @@ import AppKit
 /// UI 的唯一数据源：串联扫描、元数据、歌词、播放队列与播放引擎。
 ///
 /// 曲库有两份：`library` 是扫描出来的全量（文件顺序，不动），`tracks` 是经过
-/// 搜索过滤与排序后**实际展示和播放**的列表。播放队列按 `tracks` 的下标工作，
-/// 所以排序或搜索一变，队列必须跟着重建 —— 这件事统一在 `rebuildDisplayed()` 里做。
+/// 搜索过滤与排序后**实际展示**的列表。播放用的列表是 `nowPlaying`（`NowPlayingList`）：
+/// 跟随状态下它是 `tracks` 的镜像，独立状态下由歌单点播或手动编辑产生，此时曲库的
+/// 搜索、排序、刷新不再影响它（§3.1 两种状态）。
 @MainActor
 public final class PlayerViewModel: ObservableObject {
 
@@ -14,7 +15,7 @@ public final class PlayerViewModel: ObservableObject {
 
     /// 扫描得到的全量曲库，保持文件顺序。
     @Published public private(set) var library: [Track] = []
-    /// 过滤 + 排序后的列表。UI 展示与播放队列都以它为准。
+    /// 过滤 + 排序后的列表。曲库列表展示以它为准。
     @Published public private(set) var tracks: [Track] = []
     @Published public private(set) var folderURL: URL?
     @Published public private(set) var isScanning = false
@@ -48,9 +49,39 @@ public final class PlayerViewModel: ObservableObject {
         !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
+    // MARK: - 播放列表（PL）
+
+    /// 播放用的列表：跟随曲库或独立编辑，见 `NowPlayingList`。
+    @Published public private(set) var nowPlaying: NowPlayingList
+    /// `nowPlaying` 的内容、状态、来源、当前曲目每变一次加 1。T-010 监听它保存。
+    @Published public private(set) var nowPlayingRevision: Int = 0
+
+    /// 当前曲目在 `nowPlaying.items` 里的下标，PL 页高亮用。
+    public var nowPlayingIndex: Int? { nowPlaying.queue.current }
+
+    /// 来源文字：曲库 / 歌单「{name}」（T-006）/ 已手动调整。
+    public var nowPlayingSourceText: String {
+        switch nowPlaying.source {
+        case .library: return "曲库"
+        case .songlist(let name): return "歌单「\(name)」"
+        case .edited: return "已手动调整"
+        }
+    }
+
+    /// PL 页顶部的一行说明文字。
+    public var nowPlayingHeader: String {
+        let count = nowPlaying.items.count
+        guard count > 0 else { return "播放列表为空" }
+        if let index = nowPlayingIndex, nowPlaying.items.indices.contains(index) {
+            return "来源：\(nowPlayingSourceText) · 共 \(count) 首 · 当前第 \(index + 1) 首"
+        }
+        return "来源：\(nowPlayingSourceText) · 共 \(count) 首"
+    }
+
     // MARK: - 播放状态
 
-    /// 当前曲目在 `tracks` 里的下标。被搜索过滤掉时为 nil（歌照放，只是列表里没有它）。
+    /// 当前曲目在 `tracks` 里的下标。跟随状态下与 `nowPlayingIndex` 相同；
+    /// 独立状态下按 `identity` 在 `tracks` 里重新找。曲库列表高亮用。
     @Published public private(set) var currentIndex: Int?
     /// 正在播放的曲目本身。不受过滤影响，右侧「正在播放」区读这个。
     @Published public private(set) var playingTrack: Track?
@@ -71,7 +102,7 @@ public final class PlayerViewModel: ObservableObject {
 
     @Published public var playMode: PlayMode {
         didSet {
-            queue.mode = playMode
+            nowPlaying.queue.mode = playMode
             Preferences.playMode = playMode
             // 顺序变了，之前预判的「下一首」作废
             engine.invalidatePreload()
@@ -130,7 +161,6 @@ public final class PlayerViewModel: ObservableObject {
     // MARK: - 内部
 
     private let engine = PlayerEngine()
-    private var queue = PlaybackQueue()
     private var metadataTask: Task<Void, Never>?
     /// 连续播放失败次数。用来避免整目录都是坏文件时无限自动跳曲。
     private var consecutiveFailures = 0
@@ -148,7 +178,7 @@ public final class PlayerViewModel: ObservableObject {
         self.nowPlayingLayout = Preferences.nowPlayingLayout
         self.replayGainEnabled = Preferences.replayGainEnabled
         self.sampleRateMatchingEnabled = Preferences.sampleRateMatchingEnabled
-        self.queue = PlaybackQueue(count: 0, mode: mode)
+        self.nowPlaying = NowPlayingList(mode: mode)
 
         engine.volume = vol
         engine.matchesOutputSampleRate = Preferences.sampleRateMatchingEnabled
@@ -186,7 +216,6 @@ public final class PlayerViewModel: ObservableObject {
         folderURL = folder
         Preferences.lastFolder = folder
 
-        currentIndex = nil
         playingTrack = nil
         playingTrackMissing = false
         currentTime = 0
@@ -197,6 +226,13 @@ public final class PlayerViewModel: ObservableObject {
         consecutiveFailures = 0
         // 换了曲库，旧关键词多半一条都匹配不上，留着只会看到空列表
         searchText = ""
+
+        // 立即清掉队列的选中项（与基线一致，不等异步扫描完成才清空高亮）。
+        // 独立状态下 items 保留（FR-024 ③，T-009 验收）；跟随状态下 items
+        // 由下面的 performScan → rebuildDisplayed → syncFromLibrary 换成新曲库。
+        nowPlaying.detachCurrent()
+        bumpRevision()
+        recomputeCurrentIndex()
 
         performScan(folder: folder, reportEmpty: true)
     }
@@ -278,10 +314,11 @@ public final class PlayerViewModel: ObservableObject {
 
     // MARK: - 搜索与排序
 
-    /// 重建展示列表并让播放队列跟上。
+    /// 重建展示列表并让播放列表跟上。
     ///
-    /// 正在播放的曲目若仍在新列表里，就把队列位置对齐到它，播放不受影响；
+    /// 跟随状态：正在播放的曲目若仍在新列表里，就把队列位置对齐到它，播放不受影响；
     /// 若被过滤掉了，歌继续放，但列表中没有高亮项，此时按「下一首」会从列表头开始。
+    /// 独立状态：只重建 `tracks`，PL 的内容和队列都不动。
     private func rebuildDisplayed() {
         // 先记住当前曲目在旧列表里的序号，它从新列表消失时要靠这个定位
         let previousIndex = currentIndex
@@ -293,30 +330,32 @@ public final class PlayerViewModel: ObservableObject {
             ascending: sortAscending
         )
 
-        queue.setCount(tracks.count)
-
-        if let playingIdentity = playingTrack?.identity,
-           let index = tracks.firstIndex(where: { $0.identity == playingIdentity }) {
-            queue.select(index)
-            currentIndex = index
-        } else {
-            // 当前曲目不在新列表里：可能是文件被删了，也可能只是被搜索过滤掉。
-            // 停靠在它原来的序号上，播完从那个位置接着走，而不是跳回列表开头。
-            if let previousIndex {
-                queue.park(at: previousIndex)
-            } else {
-                queue.clearSelection()
-            }
-            currentIndex = nil
+        if nowPlaying.state == .followLibrary {
+            nowPlaying.syncFromLibrary(tracks, playing: playingTrack?.identity, previousIndex: previousIndex)
+            // 列表变了，预判的「下一首」可能已经不对
+            engine.invalidatePreload()
         }
 
+        recomputeCurrentIndex()
         updatePlayingTrackMissing()
-
-        // 列表变了，预判的「下一首」可能已经不对
-        engine.invalidatePreload()
+        bumpRevision()
     }
 
-    /// 正在播的曲目是否已经不在曲库里。
+    /// 按 `nowPlaying.state` 重新计算 `currentIndex`。
+    private func recomputeCurrentIndex() {
+        switch nowPlaying.state {
+        case .followLibrary:
+            currentIndex = nowPlaying.queue.current
+        case .independent:
+            if let identity = playingTrack?.identity {
+                currentIndex = tracks.firstIndex(where: { $0.identity == identity })
+            } else {
+                currentIndex = nil
+            }
+        }
+    }
+
+    /// 正在播的曲目是否已经不在曲库中。
     ///
     /// 判据是**曲库**而不是展示列表 —— 被搜索过滤掉不等于文件没了，
     /// 只有重扫后曲库里都找不到，才说明文件真的被删除或移走了。
@@ -338,16 +377,26 @@ public final class PlayerViewModel: ObservableObject {
 
     // MARK: - 播放控制
 
+    /// 在曲库点播。
     public func play(at index: Int) {
         guard tracks.indices.contains(index) else { return }
-        queue.select(index)
+        nowPlaying.playFromLibrary(tracks, at: index)
+        bumpRevision()
+        startCurrent()
+    }
+
+    /// 在播放列表页双击：只切换播放位置，状态和来源不变。
+    public func playInNowPlaying(at index: Int) {
+        guard nowPlaying.items.indices.contains(index) else { return }
+        nowPlaying.selectInList(index)
+        bumpRevision()
         startCurrent()
     }
 
     public func togglePlayPause() {
         if playingTrack == nil {
             // 还没选歌时，播放键等同于从头开始
-            if queue.next(auto: false) != nil {
+            if nowPlaying.queue.next(auto: false) != nil {
                 startCurrent()
             }
             return
@@ -373,8 +422,9 @@ public final class PlayerViewModel: ObservableObject {
             seek(to: 0)
             return
         }
-        guard queue.previous() != nil else { return }
+        guard nowPlaying.queue.previous() != nil else { return }
         startCurrent()
+        bumpRevision()
     }
 
     public func seek(to seconds: Double) {
@@ -393,24 +443,25 @@ public final class PlayerViewModel: ObservableObject {
 
     /// 手动切歌。自动推进由引擎的无缝队列负责，不走这里。
     private func advance(auto: Bool) {
-        guard queue.next(auto: auto) != nil else {
+        guard nowPlaying.queue.next(auto: auto) != nil else {
             // 顺序播放到达列表末尾
             stop()
             return
         }
         startCurrent()
+        bumpRevision()
     }
 
     private func startCurrent() {
-        guard let index = queue.current, tracks.indices.contains(index) else { return }
-        let track = tracks[index]
+        guard let index = nowPlaying.queue.current, nowPlaying.items.indices.contains(index) else { return }
+        let track = nowPlaying.items[index]
 
-        currentIndex = index
         playingTrack = track
         playingTrackMissing = false
         currentTime = 0
         duration = track.duration
         refreshLyrics(for: track)
+        recomputeCurrentIndex()
 
         engine.load(playable(for: track), autoplay: true)
         isPlaying = engine.isPlaying
@@ -418,22 +469,20 @@ public final class PlayerViewModel: ObservableObject {
 
     /// 引擎已无缝推进到下一首，这里只需把界面状态跟上。
     private func handleAutoAdvance(to url: URL) {
-        // 推进播放队列。正常情况它给出的就是引擎已经切到的那首；
-        // 若期间列表被排序/过滤改动过，就按 URL 重新对齐。
-        let expected = queue.next(auto: true)
+        // 推进播放列表。正常情况它给出的就是引擎已经切到的那首；
+        // 若期间列表被排序/过滤/编辑改动过，就按 identity 重新对齐。
         let identity = TrackIdentity(url: url)
+        let expected = nowPlaying.queue.next(auto: true)
 
-        if let expected, tracks.indices.contains(expected), tracks[expected].identity == identity {
-            currentIndex = expected
-        } else if let found = tracks.firstIndex(where: { $0.identity == identity }) {
-            queue.select(found)
-            currentIndex = found
-        } else {
-            // 这首已被搜索过滤掉，继续播但列表里不高亮
-            currentIndex = nil
+        if let expected, nowPlaying.items.indices.contains(expected), nowPlaying.items[expected].identity == identity {
+            // 队列推进的正是引擎切到的这首，不需要额外处理
+        } else if let found = nowPlaying.index(of: identity) {
+            nowPlaying.selectInList(found)
         }
+        // 都找不到：这首已经不在 PL 里了，继续播但列表里不高亮
 
-        let track = currentIndex.map { tracks[$0] }
+        let track = nowPlaying.queue.current
+            .flatMap { nowPlaying.items.indices.contains($0) ? nowPlaying.items[$0] : nil }
             ?? library.first { $0.identity == identity }
             ?? Track(url: url)
 
@@ -443,7 +492,9 @@ public final class PlayerViewModel: ObservableObject {
         refreshLyrics(for: track)
         isPlaying = true
         consecutiveFailures = 0
+        recomputeCurrentIndex()
         updatePlayingTrackMissing()
+        bumpRevision()
     }
 
     /// 组装引擎需要的播放条目：URL + 归一化增益 + 采样率。
@@ -459,6 +510,10 @@ public final class PlayerViewModel: ObservableObject {
         currentLyricIndex = nil
     }
 
+    private func bumpRevision() {
+        nowPlayingRevision += 1
+    }
+
     private func wireEngineCallbacks() {
         engine.onProgress = { [weak self] seconds in
             guard let self else { return }
@@ -470,9 +525,9 @@ public final class PlayerViewModel: ObservableObject {
         // peekNext 不能有副作用 —— 此刻当前曲还在播，队列位置不能动。
         engine.provideNext = { [weak self] in
             guard let self,
-                  let index = self.queue.peekNext(auto: true),
-                  self.tracks.indices.contains(index) else { return nil }
-            return self.playable(for: self.tracks[index])
+                  let index = self.nowPlaying.queue.peekNext(auto: true),
+                  self.nowPlaying.items.indices.contains(index) else { return nil }
+            return self.playable(for: self.nowPlaying.items[index])
         }
 
         engine.onAdvanced = { [weak self] url in
@@ -483,8 +538,9 @@ public final class PlayerViewModel: ObservableObject {
             guard let self else { return }
             // 队列里没有下一首了。顺序播放到底就是停；随机模式一轮播完时
             // peekNext 拿不到新顺序，此处补一次真正的推进。
-            if let next = self.queue.next(auto: true), self.tracks.indices.contains(next) {
+            if let next = self.nowPlaying.queue.next(auto: true), self.nowPlaying.items.indices.contains(next) {
                 self.startCurrent()
+                self.bumpRevision()
             } else {
                 self.stop()
             }
@@ -498,11 +554,11 @@ public final class PlayerViewModel: ObservableObject {
             // 坏文件不该卡住播放，自动跳过；但整个列表都放不出来时必须停下，
             // 否则会在队列里无限打转。
             self.consecutiveFailures += 1
-            guard self.consecutiveFailures < max(1, self.tracks.count) else {
+            guard self.consecutiveFailures < max(1, self.nowPlaying.items.count) else {
                 self.errorMessage = "列表中的音频都无法播放，已停止"
                 self.engine.unload()
-                self.currentIndex = nil
                 self.playingTrack = nil
+                self.recomputeCurrentIndex()
                 return
             }
             self.advance(auto: false)
