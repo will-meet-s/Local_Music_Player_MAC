@@ -536,6 +536,28 @@ public final class PlayerViewModel: ObservableObject {
         sortAscending.toggle()
     }
 
+    // MARK: - 定位当前播放的歌曲（T-016）
+
+    /// 口径见方案 §3.1：播放、暂停、停止、顺序放完后停着的最后一首都算有当前曲目；
+    /// 清空、FR-006 放完收尾、切换文件夹、全部放不出来之后没有。
+    public var canLocateCurrent: Bool { playingTrack != nil }
+
+    /// 不改任何状态（⑤）；`.notInFolder` 时提示一次，列表不用动。
+    public func locateCurrent() -> LocateResult {
+        let result = LibraryLocator.locate(playing: playingTrack?.identity, displayed: tracks, libraryIndex: libraryIndex)
+        if result == .notInFolder {
+            showNotice("当前播放的歌曲不在当前文件夹中")
+        }
+        return result
+    }
+
+    /// 「清空搜索并定位」：先清空搜索词（和用户手动清空完全一样，走 `rebuildDisplayed`，
+    /// 跟随状态下 PL 会跟着变），再定位。
+    public func clearSearchAndLocate() -> LocateResult {
+        searchText = ""
+        return locateCurrent()
+    }
+
     // MARK: - 播放控制
 
     /// 在曲库点播。不可用时（T-007）提示「找不到该文件」，当前播放和播放列表都不变。

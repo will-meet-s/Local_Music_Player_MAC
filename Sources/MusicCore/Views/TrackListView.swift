@@ -5,52 +5,85 @@ struct TrackListView: View {
     @EnvironmentObject private var vm: PlayerViewModel
     @EnvironmentObject private var availability: AvailabilityStore
     @State private var selection = Set<URL>()
+    /// T-016：当前曲目被搜索过滤掉时的提示条（只在用户点 × 、搜索词变化、
+    /// 当前曲目变化时消失，其他什么都不变）。
+    @State private var showFilteredPrompt = false
 
     var body: some View {
-        VStack(spacing: 0) {
-            ListToolbar()
-            Divider()
-            content
+        ScrollViewReader { proxy in
+            VStack(spacing: 0) {
+                ListToolbar(onLocate: { locate(proxy) })
+                if showFilteredPrompt {
+                    filteredPrompt(proxy)
+                }
+                Divider()
+                content(proxy)
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         // 侧栏用更通透的材质，和右侧拉开层次 —— 这是 macOS 原生的双色调做法
         .background(VisualEffectView(material: .sidebar, opacity: vm.backgroundOpacity))
+        .onChange(of: vm.searchText) { _, _ in showFilteredPrompt = false }
+        .onChange(of: vm.playingTrack?.identity) { _, _ in showFilteredPrompt = false }
     }
 
     @ViewBuilder
-    private var content: some View {
+    private func content(_ proxy: ScrollViewProxy) -> some View {
         if vm.tracks.isEmpty {
             EmptyLibraryView()
         } else {
-            ScrollViewReader { proxy in
-                List(selection: $selection) {
-                    ForEach(Array(vm.tracks.enumerated()), id: \.element.id) { index, track in
-                        TrackRow(
-                            track: track, isCurrent: index == vm.currentIndex, isPlaying: vm.isPlaying,
-                            isAvailable: availability.isAvailable(track.identity)
-                        )
-                        .tag(track.id)
-                    }
+            List(selection: $selection) {
+                ForEach(Array(vm.tracks.enumerated()), id: \.element.id) { index, track in
+                    TrackRow(
+                        track: track, isCurrent: index == vm.currentIndex, isPlaying: vm.isPlaying,
+                        isAvailable: availability.isAvailable(track.identity)
+                    )
+                    .tag(track.id)
                 }
-                .listStyle(.inset)
-                // List 默认铺一层不透明背景，会把磨砂盖掉
-                .scrollContentBackground(.hidden)
-                // 双击播放；右键菜单作用于右键时的选中集合，在未选中的行上右键只作用于这一行
-                // （contextMenu(forSelectionType:) 的默认行为）。
-                .contextMenu(forSelectionType: URL.self) { urls in
-                    contextMenuItems(for: urls)
-                } primaryAction: { urls in
-                    guard urls.count == 1, let url = urls.first,
-                          let index = vm.tracks.firstIndex(where: { $0.id == url }) else { return }
-                    vm.play(at: index)
-                }
-                // List 在内容变化时会保留原来的滚动偏移，搜索或改排序之后
-                // 看到的是列表中段，必须手动回顶。
-                .onChange(of: vm.searchText) { _, _ in scrollToTop(proxy) }
-                .onChange(of: vm.sortOrder) { _, _ in scrollToTop(proxy) }
-                .onChange(of: vm.sortAscending) { _, _ in scrollToTop(proxy) }
             }
+            .listStyle(.inset)
+            // List 默认铺一层不透明背景，会把磨砂盖掉
+            .scrollContentBackground(.hidden)
+            // 双击播放；右键菜单作用于右键时的选中集合，在未选中的行上右键只作用于这一行
+            // （contextMenu(forSelectionType:) 的默认行为）。
+            .contextMenu(forSelectionType: URL.self) { urls in
+                contextMenuItems(for: urls)
+            } primaryAction: { urls in
+                guard urls.count == 1, let url = urls.first,
+                      let index = vm.tracks.firstIndex(where: { $0.id == url }) else { return }
+                vm.play(at: index)
+            }
+            // List 在内容变化时会保留原来的滚动偏移，搜索或改排序之后
+            // 看到的是列表中段，必须手动回顶。
+            .onChange(of: vm.searchText) { _, _ in scrollToTop(proxy) }
+            .onChange(of: vm.sortOrder) { _, _ in scrollToTop(proxy) }
+            .onChange(of: vm.sortAscending) { _, _ in scrollToTop(proxy) }
         }
+    }
+
+    /// T-016 §2.3：被搜索过滤掉时的提示条，放在 `ListToolbar` 下面、列表上面。
+    private func filteredPrompt(_ proxy: ScrollViewProxy) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: "info.circle")
+                .foregroundStyle(.secondary)
+            Text("当前播放的歌曲不在搜索结果中")
+                .font(.callout)
+            Spacer()
+            Button("清空搜索并定位") {
+                clearSearchAndLocate(proxy)
+            }
+            .buttonStyle(.link)
+            .font(.callout)
+            Button {
+                showFilteredPrompt = false
+            } label: {
+                Image(systemName: "xmark")
+            }
+            .buttonStyle(.plain)
+            .help("关闭")
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
     }
 
     @ViewBuilder
@@ -67,11 +100,50 @@ struct TrackListView: View {
             proxy.scrollTo(first.id, anchor: .top)
         }
     }
+
+    // MARK: - T-016：定位当前播放的歌曲
+
+    private func locate(_ proxy: ScrollViewProxy) {
+        switch vm.locateCurrent() {
+        case .found(let index):
+            showFilteredPrompt = false
+            scrollAndSelect(proxy, index: index, extraHop: false)
+        case .filteredOut:
+            showFilteredPrompt = true
+        case .notInFolder, .noTrack:
+            break
+        }
+    }
+
+    private func clearSearchAndLocate(_ proxy: ScrollViewProxy) {
+        showFilteredPrompt = false
+        switch vm.clearSearchAndLocate() {
+        case .found(let index):
+            // §4.2：searchText 变化会触发上面 content 里的 scrollToTop（下一个 runloop），
+            // 这次的滚动要排在它后面，多跳一次主队列。
+            scrollAndSelect(proxy, index: index, extraHop: true)
+        case .filteredOut, .notInFolder, .noTrack:
+            break
+        }
+    }
+
+    private func scrollAndSelect(_ proxy: ScrollViewProxy, index: Int, extraHop: Bool) {
+        guard vm.tracks.indices.contains(index) else { return }
+        let id = vm.tracks[index].id
+        selection = [id]
+        let scrollToCenter = { proxy.scrollTo(id, anchor: .center) }
+        if extraHop {
+            DispatchQueue.main.async { DispatchQueue.main.async(execute: scrollToCenter) }
+        } else {
+            DispatchQueue.main.async(execute: scrollToCenter)
+        }
+    }
 }
 
-/// 搜索框 + 排序维度 + 升降序。
+/// 搜索框 + 排序维度 + 升降序 + 定位当前播放的歌曲。
 private struct ListToolbar: View {
     @EnvironmentObject private var vm: PlayerViewModel
+    let onLocate: () -> Void
 
     var body: some View {
         VStack(spacing: 8) {
@@ -116,6 +188,14 @@ private struct ListToolbar: View {
                 }
                 .buttonStyle(.borderless)
                 .help(vm.sortAscending ? "升序" : "降序")
+
+                // T-016：定位当前播放的歌曲。
+                Button(action: onLocate) {
+                    Image(systemName: "scope")
+                }
+                .buttonStyle(.borderless)
+                .help("定位当前播放的歌曲")
+                .disabled(!vm.canLocateCurrent)
 
                 Spacer()
 
