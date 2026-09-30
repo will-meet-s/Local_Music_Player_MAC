@@ -2,6 +2,7 @@ import SwiftUI
 
 public struct ContentView: View {
     @EnvironmentObject private var vm: PlayerViewModel
+    @EnvironmentObject private var songlists: SonglistService
 
     public init() {}
 
@@ -29,6 +30,8 @@ public struct ContentView: View {
         .frostedBackground(opacity: vm.backgroundOpacity)
         .task {
             vm.restoreLastSession()
+            songlists.playerViewModel = vm
+            await songlists.loadAll()
         }
     }
 }

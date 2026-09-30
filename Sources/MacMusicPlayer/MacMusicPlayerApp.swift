@@ -8,11 +8,13 @@ import MusicCore
 struct MacMusicPlayerApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @StateObject private var viewModel = PlayerViewModel()
+    @StateObject private var songlists = SonglistService()
 
     var body: some Scene {
         WindowGroup("音乐播放器", id: PlayerWindow.mainID) {
             ContentView()
                 .environmentObject(viewModel)
+                .environmentObject(songlists)
                 .frame(minWidth: 880, minHeight: 560)
         }
         .windowResizability(.contentMinSize)

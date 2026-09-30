@@ -15,6 +15,9 @@ public final class PlayerViewModel: ObservableObject {
 
     /// 扫描得到的全量曲库，保持文件顺序。
     @Published public private(set) var library: [Track] = []
+    /// `library` 里 identity 到下标的索引，随 `library` 整体重扫一起重建，O(1) 查找。
+    /// 供 T-003 歌单详情页按路径把「曲库里已读好元数据的那份」显示出来（FR-012、FR-020）。
+    @Published public private(set) var libraryIndex: [TrackIdentity: Int] = [:]
     /// 过滤 + 排序后的列表。曲库列表展示以它为准。
     @Published public private(set) var tracks: [Track] = []
     @Published public private(set) var folderURL: URL?
@@ -258,6 +261,7 @@ public final class PlayerViewModel: ObservableObject {
             // 复用已有条目，避免重扫时把整库的元数据全部重读一遍
             let known = Dictionary(self.library.map { ($0.url, $0) }, uniquingKeysWith: { first, _ in first })
             self.library = urls.map { known[$0] ?? Track(url: $0) }
+            self.rebuildLibraryIndex()
 
             self.rebuildDisplayed()
             self.isScanning = false
@@ -339,6 +343,10 @@ public final class PlayerViewModel: ObservableObject {
         recomputeCurrentIndex()
         updatePlayingTrackMissing()
         bumpRevision()
+    }
+
+    private func rebuildLibraryIndex() {
+        libraryIndex = Dictionary(uniqueKeysWithValues: library.enumerated().map { ($1.identity, $0) })
     }
 
     /// 按 `nowPlaying.state` 重新计算 `currentIndex`。
