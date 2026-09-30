@@ -13,6 +13,8 @@ struct SonglistDetailView: View {
     @State private var selection = Set<URL>()
     /// F-7：不在曲库里的曲目，后台读到的元数据先放这里，读到一首就更新一首。
     @State private var loadedMetadata: [TrackIdentity: Track] = [:]
+    /// T-012：歌单内搜索，不保存。
+    @State private var searchText = ""
 
     private var name: String {
         songlists.summaries.first(where: { $0.id == id })?.name ?? ""
@@ -22,16 +24,25 @@ struct SonglistDetailView: View {
         songlists.entries(of: id) ?? []
     }
 
+    /// T-012：和 `PlayerViewModel.isFiltering` 同一写法；T-005 用它禁止挪动顺序。
+    private var isFiltering: Bool {
+        !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
     /// T-006：详情页当前显示的曲目。点播时把这个数组本身传给 `playSonglist`/
     /// `playSonglistAll`——不要重新从 `SonglistService` 取，Swift 数组是值类型，
-    /// 传过去就是一份独立快照。T-012 之后这里会换成过滤后的结果。
+    /// 传过去就是一份独立快照。T-012：按歌单内搜索过滤，只过滤不排序（`filtered`
+    /// 不是 `apply`），保持歌单里的原顺序。
     private var displayedTracks: [Track] {
-        entries.map { resolvedTrack(for: $0) }
+        let allTracks = entries.map { resolvedTrack(for: $0) }
+        return TrackFilter.filtered(allTracks, search: searchText)
     }
 
     var body: some View {
         VStack(spacing: 0) {
             header
+            Divider()
+            searchBar
             Divider()
             content
         }
@@ -48,6 +59,47 @@ struct SonglistDetailView: View {
         // 决定要不要额外给这个歌单的曲目排一次 high 优先级检查。
         .task(id: id) { songlists.openedID = id }
         .onDisappear { songlists.openedID = nil }
+        // T-012：切换到另一个歌单时清空搜索词，不带着上一个歌单的搜索词进来。
+        .onChange(of: id) { _, _ in searchText = "" }
+    }
+
+    /// T-012：样式照搬 `TrackListView` 的 `ListToolbar` 搜索框。
+    private var searchBar: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 6) {
+                Image(systemName: "magnifyingglass")
+                    .foregroundStyle(.secondary)
+                    .font(.callout)
+
+                TextField("在歌单内搜索", text: $searchText)
+                    .textFieldStyle(.plain)
+                    .font(.callout)
+
+                if isFiltering {
+                    Button {
+                        searchText = ""
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.plain)
+                    .help("清除搜索")
+                }
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 5)
+            .background(Color.secondary.opacity(0.12), in: RoundedRectangle(cornerRadius: 6))
+
+            // T-005 §2：搜索时禁止挪动顺序，这里说明原因。
+            if isFiltering {
+                Text("清空搜索后可以调整顺序")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.top, 8)
+        .padding(.bottom, isFiltering ? 4 : 8)
     }
 
     private var header: some View {
@@ -86,29 +138,24 @@ struct SonglistDetailView: View {
     @ViewBuilder
     private var content: some View {
         if entries.isEmpty {
-            VStack(spacing: 8) {
-                Image(systemName: "music.note.list")
-                    .font(.system(size: 40))
-                    .foregroundStyle(.secondary)
-                Text("歌单里还没有歌曲")
-                    .foregroundStyle(.secondary)
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            emptyState(message: "歌单里还没有歌曲")
+        } else if displayedTracks.isEmpty {
+            // T-012：歌单本身不为空，只是搜索没有命中（FR-018、FR-022）。
+            emptyState(message: "没有匹配「\(searchText)」的歌曲")
         } else {
-            // entries 里 path 按 TrackIdentity 不重复（§3.2），resolve 出来的 Track.id
-            // 因此也不重复，可以直接当多选的 tag 用。
+            // Track.id（url）在 displayedTracks 里不重复（§3.2 entries 按 identity
+            // 不重复，resolve 出来的也不重复），可以直接当多选的 tag 用。
             List(selection: $selection) {
-                ForEach(entries, id: \.path) { entry in
-                    let track = resolvedTrack(for: entry)
+                ForEach(displayedTracks, id: \.id) { track in
                     TrackRow(
                         track: track, isCurrent: track.identity == vm.playingTrack?.identity, isPlaying: vm.isPlaying,
                         isAvailable: availability.isAvailable(track.identity)
                     )
                     .tag(track.id)
                 }
-                // T-005：T-012（歌单内搜索）还没合入，isFiltering 恒为 false，
-                // 不需要在这里禁用拖动；T-012 落地后按方案 §2 加上判断。
-                .onMove(perform: handleMove)
+                // T-005 §2：搜索时禁止挪动（过滤后的「挪到第几位」对应不到完整
+                // 列表里的确定位置）。
+                .onMove(perform: isFiltering ? nil : handleMove)
             }
             .listStyle(.inset)
             .scrollContentBackground(.hidden)
@@ -128,14 +175,25 @@ struct SonglistDetailView: View {
         }
     }
 
+    private func emptyState(message: String) -> some View {
+        VStack(spacing: 8) {
+            Image(systemName: "music.note.list")
+                .font(.system(size: 40))
+                .foregroundStyle(.secondary)
+            Text(message)
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
     @ViewBuilder
     private func contextMenuItems(for urls: Set<URL>) -> some View {
         let selectedTracks = selectedTracks(for: urls)
         Button("下一首播放") { vm.playNext(selectedTracks) }
         Button("添加到播放列表末尾") { vm.appendToNowPlaying(selectedTracks) }
         AddToSonglistMenu(tracks: { selectedTracks }, excluding: id)
-        // T-005：恰好选中 1 首、且不在搜索中（T-012 未合入前恒不在搜索中）时才显示。
-        if urls.count == 1, let url = urls.first, let index = entryIndex(for: url) {
+        // T-005 §2：恰好选中 1 首、且不在搜索中时才显示。
+        if !isFiltering, urls.count == 1, let url = urls.first, let index = entryIndex(for: url) {
             Divider()
             Button("上移一位") { moveEntry(at: index, to: index - 1) }
                 .disabled(index == 0)
