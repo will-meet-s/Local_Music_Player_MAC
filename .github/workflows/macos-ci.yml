@@ -1,0 +1,59 @@
+name: macOS CI
+
+on:
+  push:
+    branches: ['feature/**']
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: macos-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: macos-14
+    timeout-minutes: 30
+    env:
+      VERSION: 1.0.0-ci.${{ github.run_number }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 工具链版本
+        run: |
+          sw_vers
+          xcodebuild -version
+          swift --version
+
+      - name: 编译（release）
+        run: swift build -c release
+
+      - name: 单测
+        run: |
+          set -o pipefail
+          swift test 2>&1 | tee swift-test.log
+
+      - name: 失败用例写成 annotations
+        if: failure()
+        run: bash scripts/ci-test-annotations.sh swift-test.log
+
+      - name: 打包 .app 和 .dmg
+        run: make dmg VERSION="$VERSION"
+
+      - name: 计算 artifact 名
+        id: name
+        run: |
+          ref="${GITHUB_HEAD_REF:-$GITHUB_REF_NAME}"
+          echo "artifact=MacMusicPlayer-${ref//\//-}-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+
+      - name: 上传安装包
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.name.outputs.artifact }}
+          path: build/MacMusicPlayer-${{ env.VERSION }}.dmg
+          if-no-files-found: error
+          retention-days: 14
