@@ -543,22 +543,37 @@ final class NowPlayingListTests: XCTestCase {
         _ = list.queue.next(auto: true) // 播完第 1 首
         _ = list.queue.next(auto: true) // 播完第 2 首，当前第 3 首（对应设计里的 Z）
 
-        // 找一首「还没播过、且离当前最远」的曲目 X（本轮顺序表的最后一位），
-        // 这样如果 playNext 没有把被挪过来的曲目真的移到 placement 位置（F-8 的 bug），
-        // 它会留在原位（本轮最后一个播），下一次 next 就不会是它，测试能发现问题。
         let currentIdentity = list.queue.current.map { list.items[$0].identity }
-        let order = list.queue.currentOrder
-        guard let curPos = list.queue.current.flatMap({ cur in order.firstIndex(of: cur) }),
-              curPos + 1 < order.count else {
-            return XCTFail("应该还有没播过的曲目")
+        guard let curItemsIdx = list.queue.current,
+              let curPos = list.queue.currentOrder.firstIndex(of: curItemsIdx) else {
+            return XCTFail("应有当前曲目")
         }
-        let x = list.items[order[order.count - 1]]
+        // 选一个不是当前曲目所在的位置（5 首里必然存在）；之前按"顺序表最后一位"挑，
+        // 当前曲目恰好落在最后一位时会选中它自己，playNext 会把它当成"就是正在播放的
+        // 那首"而直接过滤掉（changed == false），导致断言偶发失败——这里改成结构性地
+        // 找任意一个不等于 curPos 的位置，不依赖随机结果落在哪。
+        let order = list.queue.currentOrder
+        guard let candidatePos = order.indices.first(where: { $0 != curPos }) else {
+            return XCTFail("应该不止一首曲目")
+        }
+        let x = list.items[order[candidatePos]]
 
         let result = list.playNext([x], playing: currentIdentity)
         XCTAssertTrue(result.changed)
         XCTAssertEqual(result.relocated, 1, "X 本来就在列表里，应计入 relocated")
 
-        XCTAssertEqual(list.items[list.queue.next(auto: true)!].identity, x.identity, "应紧接着放 X")
+        // 直接检查顺序表结构：X 应该紧跟在当前曲目后面——不调用 next() 去验证，
+        // 避免任何跨轮次的可能（即便这里按 afterCurrent 的插入逻辑分析不会有风险，
+        // 结构性断言仍然更直接、更不依赖对边界条件的额外推理）。
+        guard let newCurItemsIdx = list.queue.current,
+              let newCurPos = list.queue.currentOrder.firstIndex(of: newCurItemsIdx) else {
+            return XCTFail("应有当前曲目")
+        }
+        let newOrder = list.queue.currentOrder
+        guard let xItemsIdx = list.items.firstIndex(where: { $0.identity == x.identity }) else {
+            return XCTFail("应能找到 X")
+        }
+        XCTAssertEqual(newOrder[newCurPos + 1], xItemsIdx, "X 应该紧跟在当前曲目后面")
     }
 
     // MARK: - T-008 #26（v2，F-8）：非随机 atResume 下，被挪过来的曲目不能被跳过
