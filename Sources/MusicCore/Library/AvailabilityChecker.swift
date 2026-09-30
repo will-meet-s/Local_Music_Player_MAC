@@ -179,29 +179,48 @@ public actor AvailabilityChecker {
         return result
     }
 
-    /// 在专用串行队列上执行可能卡住的探测，外面用 `withTaskGroup` 和一个定时任务
-    /// 赛跑，谁先完成用谁的；`stat` 卡住时没办法取消，卡住的那次调用留在后台
-    /// 自己结束，不重复派发（由调用方的 `volumeProbing`/去重队列保证）。
+    /// 在专用串行队列上执行可能卡住的探测，外面用 `withCheckedContinuation` 和一个
+    /// 定时器赛跑，谁先到谁 resume；`stat` 卡住时没办法取消，卡住的那次调用留在
+    /// 后台自己结束，不重复派发（由调用方的 `volumeProbing`/去重队列保证）。
+    ///
+    /// **不能**用 `withTaskGroup` 实现这个赛跑：`withTaskGroup` 在闭包返回前会
+    /// 隐式等待全部子任务完成，即使已经 `cancelAll()`——`Thread.sleep` 卡住的
+    /// 探测不响应取消，会把整个函数拖到卡住的那次真正结束才返回，等于没有超时。
     private static func probeWithTimeout(
         seconds: TimeInterval, probe: FileProbe, _ work: @escaping @Sendable (FileProbe) -> Bool
     ) async -> Bool? {
-        await withTaskGroup(of: Bool?.self) { group in
-            group.addTask {
-                await withCheckedContinuation { continuation in
-                    probeQueue.async {
-                        continuation.resume(returning: work(probe))
-                    }
+        await withCheckedContinuation { (continuation: CheckedContinuation<Bool?, Never>) in
+            let guard_ = ResumeOnce()
+
+            probeQueue.async {
+                let result = work(probe)
+                if guard_.tryResume() {
+                    continuation.resume(returning: result)
                 }
             }
-            group.addTask {
-                try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
-                return nil
+
+            DispatchQueue.global().asyncAfter(deadline: .now() + seconds) {
+                if guard_.tryResume() {
+                    continuation.resume(returning: nil)
+                }
             }
-            let first = await group.next() ?? nil
-            group.cancelAll()
-            return first
         }
     }
 
     private static let probeQueue = DispatchQueue(label: "com.macmusicplayer.availability-probe")
+}
+
+/// 保证一个 continuation 只被 resume 一次：探测和超时定时器谁先到谁赢，
+/// 另一边即使之后才完成，也只是发现自己没抢到，不会重复 resume。
+private final class ResumeOnce: @unchecked Sendable {
+    private let lock = NSLock()
+    private var resumed = false
+
+    func tryResume() -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        guard !resumed else { return false }
+        resumed = true
+        return true
+    }
 }
