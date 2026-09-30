@@ -1,25 +1,29 @@
 #!/bin/bash
-# 把 swift test 日志里的失败用例写成 GitHub annotations，供不登录也能看到失败原因。
+# 把编译错误和 swift test 的失败用例写成 GitHub annotations，不登录也能看到失败原因。
 set -uo pipefail
-LOG="${1:-swift-test.log}"
+esc() { local m="${1//'%'/'%25'}"; printf '%s' "${m:0:1500}"; }
+rel() { printf '%s' "${1#"$GITHUB_WORKSPACE"/}"; }
 
-if [[ ! -s "$LOG" ]]; then
-    echo "::error title=没有单测日志::swift test 在运行用例之前就失败了（多半是编译错误），看「单测」这一步的原始输出"
+LINES=()
+for LOG in "$@"; do
+    [[ -s "$LOG" ]] || continue
+    while IFS= read -r l; do LINES+=("$l"); done < <(grep -E '^/.+:[0-9]+(:[0-9]+)?: error: ' "$LOG" | sort -u)
+done
+
+if [[ ${#LINES[@]} -eq 0 ]]; then
+    echo "::error title=没解析到错误行::可能是依赖解析失败或测试进程崩溃，看「编译」「单测」两步的原始输出"
     exit 0
 fi
 
-mapfile -t FAILS < <(grep -E '^/.+:[0-9]+: error: -\[' "$LOG")
-if [[ ${#FAILS[@]} -eq 0 ]]; then
-    echo "::error title=单测失败但没解析到用例::可能是编译错误或测试进程崩溃，看「单测」这一步的原始输出"
-    exit 0
-fi
-
-echo "::error title=失败用例数::${#FAILS[@]} 条（下面最多列出 9 条）"
-for line in "${FAILS[@]:0:9}"; do
+echo "::error title=错误数::${#LINES[@]} 条（下面最多列出 9 条）"
+for line in "${LINES[@]:0:9}"; do
     file="${line%%:*}"; rest="${line#*:}"; lineno="${rest%%:*}"
-    case_name="$(sed -E 's/.*error: -\[([^]]+)\].*/\1/' <<<"$line")"
-    msg="$(sed -E 's/.*error: -\[[^]]+\] : //' <<<"$line" | cut -c1-1500)"
-    msg="${msg//'%'/'%25'}"
-    rel="${file#"$GITHUB_WORKSPACE"/}"
-    echo "::error file=${rel},line=${lineno},title=${case_name}::${msg}"
+    if [[ "$line" == *"error: -["* ]]; then
+        title="$(sed -E 's/.*error: -\[([^]]+)\].*/\1/' <<<"$line")"
+        msg="$(sed -E 's/.*error: -\[[^]]+\] : //' <<<"$line")"
+    else
+        title="编译错误"
+        msg="$(sed -E 's/.*: error: //' <<<"$line")"
+    fi
+    echo "::error file=$(rel "$file"),line=${lineno},title=${title}::$(esc "$msg")"
 done
