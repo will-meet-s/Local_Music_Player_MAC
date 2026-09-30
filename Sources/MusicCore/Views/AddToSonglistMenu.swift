@@ -38,7 +38,8 @@ struct AddToSonglistMenu<Label: View>: View {
             Button("新建歌单…") {
                 // F-12：菜单项自己不弹 sheet——挂在这里的 .sheet 会在菜单关闭时被销毁，
                 // @State 跟着丢失，弹不出来。改成把待建曲目交给 ContentView 唯一的 sheet。
-                songlists.pendingCreate = tracks()
+                // F-13：这里只创建一次 PendingCreate，id 就固定了，不会在 sheet 打开期间变化。
+                songlists.pendingCreate = PendingCreate(tracks: tracks(), origin: .addToSonglist)
             }
         } label: {
             label()

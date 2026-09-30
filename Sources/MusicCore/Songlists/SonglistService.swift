@@ -21,6 +21,28 @@ public struct AddResult: Equatable, Sendable {
     }
 }
 
+/// F-12/F-13：「新建歌单…」等待创建的曲目。`id` 是实例的固定字段，创建一次之后不再变——
+/// 之前 `ContentView` 在 `.sheet(item:)` 的 `get` 里现取现造一个包装值，每次视图重绘都会
+/// 生成新 `UUID()`；播放中 `currentTime` 高频发布导致 `ContentView` 频繁重绘，sheet 的
+/// identity 跟着频繁变化，SwiftUI 把它当成「换了一个 sheet」处理，关了再弹，输入框里正在
+/// 打的字每次都被清空（F-13）。改成调用方（菜单项）只创建一次、存进 `SonglistService`，
+/// `id` 就固定了。`origin` 区分调用来源，这次只用 `.addToSonglist`；T-011 加 `.saveNowPlaying`。
+public struct PendingCreate: Identifiable {
+    public let id = UUID()
+    public let tracks: [Track]
+    public let origin: Origin
+
+    public enum Origin: Equatable {
+        case addToSonglist
+        case saveNowPlaying
+    }
+
+    public init(tracks: [Track], origin: Origin) {
+        self.tracks = tracks
+        self.origin = origin
+    }
+}
+
 /// 歌单的内存目录、发布给界面、调度写盘操作、生成提示文字。
 ///
 /// 在 `MacMusicPlayerApp` 里用 `@StateObject` 创建一个，通过 `.environmentObject`
@@ -35,7 +57,7 @@ public final class SonglistService: ObservableObject {
     /// F-12：「新建歌单…」待创建的曲目。挂在 `Menu`/`contextMenu` 内部视图上的
     /// `.sheet` 在菜单关闭时会被销毁、丢掉 `@State`，弹不出来；改成把待建曲目存
     /// 在这里，由 `ContentView` 挂唯一一个 `.sheet(item:)` 弹出。
-    @Published public var pendingCreate: [Track]?
+    @Published public var pendingCreate: PendingCreate?
 
     private let store: SonglistStore
     /// 完整的歌单内容，供 `entries(of:)` 使用；界面只看 `summaries`。

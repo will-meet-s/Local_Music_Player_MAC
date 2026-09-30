@@ -277,7 +277,7 @@ final class SonglistAddRemoveTests: XCTestCase {
         XCTAssertEqual(updated.entries[1].title, "B05", "没命中的条目不变")
     }
 
-    // MARK: - F-12：新建歌单 sheet 改用 SonglistService.pendingCreate 承载状态
+    // MARK: - F-12/F-13：新建歌单 sheet 改用 SonglistService.pendingCreate 承载状态
 
     func testNoticeTextWhenAllTracksAdded() {
         let result = AddResult(added: 3, skipped: 0, songlistName: "通勤")
@@ -299,10 +299,20 @@ final class SonglistAddRemoveTests: XCTestCase {
         XCTAssertNil(service.pendingCreate, "初始状态不应该有待创建的曲目")
 
         let tracks = ["A01", "B02"].map { track($0) }
-        service.pendingCreate = tracks
-        XCTAssertEqual(service.pendingCreate?.map(\.title), ["A01", "B02"])
+        service.pendingCreate = PendingCreate(tracks: tracks, origin: .addToSonglist)
+        XCTAssertEqual(service.pendingCreate?.tracks.map(\.title), ["A01", "B02"])
+        XCTAssertEqual(service.pendingCreate?.origin, .addToSonglist)
 
         service.pendingCreate = nil
         XCTAssertNil(service.pendingCreate, "sheet 关闭后应该清空，不残留上一次的曲目")
+    }
+
+    // F-13：id 是创建时固定下来的字段，反复读取同一个实例不应该变——sheet 的 identity
+    // 跟着它走，如果每次读都不一样，SwiftUI 会把 sheet 当成换了一个，反复关闭重开。
+    func testPendingCreateIdStaysStableAcrossRepeatedReads() {
+        let pending = PendingCreate(tracks: [track("A01")], origin: .addToSonglist)
+        let firstRead = pending.id
+        let secondRead = pending.id
+        XCTAssertEqual(firstRead, secondRead)
     }
 }
