@@ -276,4 +276,33 @@ final class SonglistAddRemoveTests: XCTestCase {
         XCTAssertEqual(updated.entries[0].duration, 200)
         XCTAssertEqual(updated.entries[1].title, "B05", "没命中的条目不变")
     }
+
+    // MARK: - F-12：新建歌单 sheet 改用 SonglistService.pendingCreate 承载状态
+
+    func testNoticeTextWhenAllTracksAdded() {
+        let result = AddResult(added: 3, skipped: 0, songlistName: "通勤")
+        XCTAssertEqual(result.noticeText, "已添加 3 首到「通勤」")
+    }
+
+    func testNoticeTextWhenSomeTracksSkipped() {
+        let result = AddResult(added: 2, skipped: 1, songlistName: "通勤")
+        XCTAssertEqual(result.noticeText, "已添加 2 首到「通勤」，1 首已存在")
+    }
+
+    func testNoticeTextWhenAllTracksSkipped() {
+        let result = AddResult(added: 0, skipped: 3, songlistName: "通勤")
+        XCTAssertEqual(result.noticeText, "3 首已存在，「通勤」没有变化")
+    }
+
+    func testPendingCreateStartsNilAndCanBeSetAndCleared() {
+        let service = SonglistService(root: root)
+        XCTAssertNil(service.pendingCreate, "初始状态不应该有待创建的曲目")
+
+        let tracks = ["A01", "B02"].map { track($0) }
+        service.pendingCreate = tracks
+        XCTAssertEqual(service.pendingCreate?.map(\.title), ["A01", "B02"])
+
+        service.pendingCreate = nil
+        XCTAssertNil(service.pendingCreate, "sheet 关闭后应该清空，不残留上一次的曲目")
+    }
 }

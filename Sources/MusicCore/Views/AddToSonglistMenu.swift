@@ -12,7 +12,6 @@ struct AddToSonglistMenu<Label: View>: View {
     let label: () -> Label
 
     @EnvironmentObject private var songlists: SonglistService
-    @State private var showingCreateSheet = false
 
     init(tracks: @escaping () -> [Track], excluding: UUID?) where Label == Text {
         self.tracks = tracks
@@ -37,26 +36,12 @@ struct AddToSonglistMenu<Label: View>: View {
             }
             Divider()
             Button("新建歌单…") {
-                showingCreateSheet = true
+                // F-12：菜单项自己不弹 sheet——挂在这里的 .sheet 会在菜单关闭时被销毁，
+                // @State 跟着丢失，弹不出来。改成把待建曲目交给 ContentView 唯一的 sheet。
+                songlists.pendingCreate = tracks()
             }
         } label: {
             label()
-        }
-        .sheet(isPresented: $showingCreateSheet) {
-            SonglistNameSheet(
-                title: "新建歌单",
-                existing: songlists.summaries.map { ($0.id, $0.name) },
-                excluding: nil
-            ) { name in
-                let result = await songlists.create(name: name, with: tracks())
-                switch result {
-                case .success(let addResult):
-                    showNotice(for: addResult)
-                    return nil
-                case .failure(let error):
-                    return error
-                }
-            }
         }
     }
 
@@ -64,20 +49,7 @@ struct AddToSonglistMenu<Label: View>: View {
         let result = await songlists.add(tracks(), to: id)
         // 失败时 errorMessage 已经在 SonglistService 里设置，ContentView 的 ErrorBanner 会显示。
         if case .success(let addResult) = result {
-            showNotice(for: addResult)
+            songlists.playerViewModel?.showNotice(addResult.noticeText)
         }
-    }
-
-    /// 提示文字（T-004 §2.4）。
-    private func showNotice(for result: AddResult) {
-        let text: String
-        if result.skipped == 0 {
-            text = "已添加 \(result.added) 首到「\(result.songlistName)」"
-        } else if result.added > 0 {
-            text = "已添加 \(result.added) 首到「\(result.songlistName)」，\(result.skipped) 首已存在"
-        } else {
-            text = "\(result.skipped) 首已存在，「\(result.songlistName)」没有变化"
-        }
-        songlists.playerViewModel?.showNotice(text)
     }
 }

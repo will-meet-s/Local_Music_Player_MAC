@@ -44,7 +44,33 @@ public struct ContentView: View {
             songlists.playerViewModel = vm
             await songlists.loadAll()
         }
+        // F-12：四个「添加到歌单」入口共用这一个 sheet；菜单项自己不再各挂一个 .sheet。
+        .sheet(item: Binding(
+            get: { songlists.pendingCreate.map { PendingCreateTracks(tracks: $0) } },
+            set: { newValue in songlists.pendingCreate = newValue?.tracks }
+        )) { pending in
+            SonglistNameSheet(
+                title: "新建歌单",
+                existing: songlists.summaries.map { ($0.id, $0.name) },
+                excluding: nil
+            ) { name in
+                let result = await songlists.create(name: name, with: pending.tracks)
+                switch result {
+                case .success(let addResult):
+                    vm.showNotice(addResult.noticeText)
+                    return nil
+                case .failure(let error):
+                    return error
+                }
+            }
+        }
     }
+}
+
+/// `.sheet(item:)` 需要 `Identifiable`；`[Track]` 本身不是，套一层标识用来触发弹出（F-12）。
+private struct PendingCreateTracks: Identifiable {
+    let id = UUID()
+    let tracks: [Track]
 }
 
 private struct HeaderBar: View {

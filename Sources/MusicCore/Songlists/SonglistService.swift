@@ -7,6 +7,18 @@ public struct AddResult: Equatable, Sendable {
     /// 因为已经在歌单里而跳过的首数（新建歌单时恒为 0）。
     public var skipped: Int
     public var songlistName: String
+
+    /// 提示文字（T-004 §2.4）。「添加到歌单」菜单和 F-12 起 `ContentView` 的新建歌单
+    /// 流程共用同一份措辞，不各写一份。
+    public var noticeText: String {
+        if skipped == 0 {
+            return "已添加 \(added) 首到「\(songlistName)」"
+        } else if added > 0 {
+            return "已添加 \(added) 首到「\(songlistName)」，\(skipped) 首已存在"
+        } else {
+            return "\(skipped) 首已存在，「\(songlistName)」没有变化"
+        }
+    }
 }
 
 /// 歌单的内存目录、发布给界面、调度写盘操作、生成提示文字。
@@ -20,6 +32,10 @@ public final class SonglistService: ObservableObject {
     @Published public private(set) var loadFailures: [LoadFailure] = []
     @Published public private(set) var isLoaded = false
     @Published public var errorMessage: String?
+    /// F-12：「新建歌单…」待创建的曲目。挂在 `Menu`/`contextMenu` 内部视图上的
+    /// `.sheet` 在菜单关闭时会被销毁、丢掉 `@State`，弹不出来；改成把待建曲目存
+    /// 在这里，由 `ContentView` 挂唯一一个 `.sheet(item:)` 弹出。
+    @Published public var pendingCreate: [Track]?
 
     private let store: SonglistStore
     /// 完整的歌单内容，供 `entries(of:)` 使用；界面只看 `summaries`。
