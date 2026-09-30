@@ -16,6 +16,11 @@ public struct ContentView: View {
                 Divider()
             }
 
+            if let notice = vm.notice {
+                NoticeBanner(message: notice)
+                Divider()
+            }
+
             HSplitView {
                 LeftPaneView()
                     .frame(minWidth: 260, idealWidth: 320, maxWidth: 460)
@@ -197,5 +202,24 @@ private struct ErrorBanner: View {
         .padding(.horizontal, 16)
         .padding(.vertical, 8)
         .background(Color.orange.opacity(0.12))
+    }
+}
+
+/// 提示性文字（T-008）：3 秒后由 ViewModel 自动置 nil，这里不需要手动关闭按钮。
+private struct NoticeBanner: View {
+    let message: String
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "info.circle.fill")
+                .foregroundStyle(Color.accentColor)
+            Text(message)
+                .font(.callout)
+                .lineLimit(2)
+            Spacer()
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 8)
+        .background(Color.accentColor.opacity(0.12))
     }
 }

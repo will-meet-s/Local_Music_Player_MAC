@@ -1,10 +1,9 @@
 import SwiftUI
 
-/// 播放列表（PL）页。T-001 阶段先保持单选和双击播放；
-/// 多选、右键菜单、拖动排序、删除键、「清空」按钮由 T-008 加入。
+/// 播放列表（PL）页。支持多选、右键菜单、拖动排序、删除键、清空（T-008）。
 struct NowPlayingListView: View {
     @EnvironmentObject private var vm: PlayerViewModel
-    @State private var selection: URL?
+    @State private var selection = Set<URL>()
 
     var body: some View {
         VStack(spacing: 0) {
@@ -23,6 +22,8 @@ struct NowPlayingListView: View {
                 .font(.callout)
                 .foregroundStyle(.secondary)
             Spacer()
+            Button("清空") { vm.clearNowPlaying() }
+                .disabled(vm.nowPlaying.items.isEmpty)
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 10)
@@ -38,17 +39,55 @@ struct NowPlayingListView: View {
                     ForEach(Array(vm.nowPlaying.items.enumerated()), id: \.element.id) { index, track in
                         TrackRow(track: track, isCurrent: index == vm.nowPlayingIndex, isPlaying: vm.isPlaying)
                             .tag(track.id)
-                            .contentShape(Rectangle())
-                            .onTapGesture(count: 2) {
-                                vm.playInNowPlaying(at: index)
-                            }
                     }
+                    .onMove(perform: handleMove)
                 }
                 .listStyle(.inset)
                 .scrollContentBackground(.hidden)
+                .contextMenu(forSelectionType: URL.self) { urls in
+                    contextMenuItems(for: urls)
+                } primaryAction: { urls in
+                    guard urls.count == 1, let url = urls.first,
+                          let index = vm.nowPlaying.items.firstIndex(where: { $0.id == url }) else { return }
+                    vm.playInNowPlaying(at: index)
+                }
+                .onDeleteCommand {
+                    removeSelected()
+                }
                 .onAppear { scrollToCurrent(proxy) }
             }
         }
+    }
+
+    @ViewBuilder
+    private func contextMenuItems(for urls: Set<URL>) -> some View {
+        let selected = SelectionOrder.byListOrder(urls, in: vm.nowPlaying.items)
+        Button("下一首播放") { vm.playNext(selected) }
+        Button("移到末尾") { vm.appendToNowPlaying(selected) }
+        Button("从播放列表移除", role: .destructive) {
+            removeByIdentity(Set(selected.map(\.identity)))
+        }
+    }
+
+    private func removeSelected() {
+        removeByIdentity(Set(selection.compactMap { url in
+            vm.nowPlaying.items.first { $0.id == url }?.identity
+        }))
+    }
+
+    private func removeByIdentity(_ identities: Set<TrackIdentity>) {
+        guard !identities.isEmpty else { return }
+        let indices = IndexSet(vm.nowPlaying.items.indices.filter { identities.contains(vm.nowPlaying.items[$0].identity) })
+        vm.removeFromNowPlaying(at: indices)
+        selection.removeAll()
+    }
+
+    /// SwiftUI 的 `destination` 是「移除前」的插入点，要换算成 `NowPlayingList.move`
+    /// 要求的「移除后」位置；多行拖动不处理，只支持单行。
+    private func handleMove(from source: IndexSet, to destination: Int) {
+        guard source.count == 1, let from = source.first else { return }
+        let to = destination > from ? destination - 1 : destination
+        vm.moveInNowPlaying(from: from, to: to)
     }
 
     /// 新的行还没完成布局就 scrollTo 会没反应，所以放到下一个 runloop。

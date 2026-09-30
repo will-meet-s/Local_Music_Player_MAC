@@ -160,13 +160,20 @@ public final class PlayerViewModel: ObservableObject {
     }
 
     @Published public var errorMessage: String?
+    /// 提示性文字（T-008），和 `errorMessage` 分开；设置后 3 秒自动置 nil。
+    @Published public private(set) var notice: String?
 
     // MARK: - 内部
 
     private let engine = PlayerEngine()
     private var metadataTask: Task<Void, Never>?
+    private var noticeTask: Task<Void, Never>?
     /// 连续播放失败次数。用来避免整目录都是坏文件时无限自动跳曲。
     private var consecutiveFailures = 0
+    /// 每次编辑（T-008）+1，供 E-2 竞态判断预加载是否已作废（§4.5）。
+    private var listVersion = 0
+    /// `provideNext` 把下一首塞进引擎缓冲时记下当时的 `listVersion`。
+    private var preloadedVersion = 0
 
     public var currentTrack: Track? { playingTrack }
 
@@ -410,6 +417,81 @@ public final class PlayerViewModel: ObservableObject {
         startCurrent()
     }
 
+    // MARK: - 播放列表编辑（T-008）
+
+    /// 下一首播放（FR-004）。
+    public func playNext(_ tracksToInsert: [Track]) {
+        let result = nowPlaying.playNext(tracksToInsert, playing: playingTrack?.identity)
+        finishEdit(result, notice: result.relocated > 0 ? "已调整到下一首" : nil)
+    }
+
+    /// 加到播放列表末尾（FR-005）。
+    public func appendToNowPlaying(_ tracksToInsert: [Track]) {
+        let result = nowPlaying.append(tracksToInsert, playing: playingTrack?.identity)
+        let notice = result.relocated > 0 ? "有 \(result.relocated) 首已在播放列表中，已调整到末尾" : nil
+        finishEdit(result, notice: notice)
+    }
+
+    /// 从播放列表移除（FR-006）。
+    public func removeFromNowPlaying(at indices: IndexSet) {
+        let result = nowPlaying.remove(at: indices)
+        finishEdit(result, notice: nil)
+    }
+
+    /// 拖动排序（FR-007）。
+    public func moveInNowPlaying(from: Int, to: Int) {
+        let result = nowPlaying.move(from: from, to: to)
+        finishEdit(result, notice: nil)
+    }
+
+    /// 清空播放列表（FR-008）。ViewModel 侧先停止播放、没有当前曲目，再清空列表。
+    public func clearNowPlaying() {
+        clearCurrentTrack()
+        nowPlaying.clear()
+        engine.invalidatePreload()
+        listVersion += 1
+        bumpRevision()
+        recomputeCurrentIndex()
+    }
+
+    /// 每个编辑命令的收尾（changed == true 时）：让预判的下一首作废、推进版本号、
+    /// 发布状态变化、按需弹提示。
+    private func finishEdit(_ result: EditResult, notice noticeText: String?) {
+        guard result.changed else { return }
+        engine.invalidatePreload()
+        listVersion += 1
+        bumpRevision()
+        recomputeCurrentIndex()
+        if let noticeText {
+            setNotice(noticeText)
+        }
+    }
+
+    private func setNotice(_ text: String) {
+        noticeTask?.cancel()
+        notice = text
+        noticeTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 3_000_000_000)
+            guard !Task.isCancelled else { return }
+            self?.notice = nil
+        }
+    }
+
+    /// 放完后「没有当前曲目」的收尾（Mac 特有，FR-006 ①③、§3.1）。
+    /// 只在独立状态、且正在播的这首已经不在 `items` 里时调用；跟随状态下
+    /// 当前曲目被搜索过滤掉时基线的行为是保留，不做这一步。
+    private func clearCurrentTrack() {
+        engine.unload()
+        playingTrack = nil
+        playingTrackMissing = false
+        isPlaying = false
+        currentTime = 0
+        duration = 0
+        lyrics = []
+        currentLyricIndex = nil
+        recomputeCurrentIndex()
+    }
+
     public func togglePlayPause() {
         if playingTrack == nil {
             // 还没选歌时，播放键等同于从头开始
@@ -463,10 +545,21 @@ public final class PlayerViewModel: ObservableObject {
         guard nowPlaying.queue.next(auto: auto) != nil else {
             // 顺序播放到达列表末尾
             stop()
+            collapseCurrentTrackIfOrphaned()
             return
         }
         startCurrent()
         bumpRevision()
+    }
+
+    /// 顺序播放到头要停止时，如果独立状态下正在播的这首已经不在 `items` 里
+    /// （被移除后放完了），就没有当前曲目了（Mac 特有，FR-006 ①③、§3.1）。
+    /// 跟随状态下不做这一步：那种情况是当前曲目被搜索过滤掉，基线的行为是保留。
+    private func collapseCurrentTrackIfOrphaned() {
+        guard nowPlaying.state == .independent,
+              let identity = playingTrack?.identity,
+              nowPlaying.index(of: identity) == nil else { return }
+        clearCurrentTrack()
     }
 
     private func startCurrent() {
@@ -490,10 +583,11 @@ public final class PlayerViewModel: ObservableObject {
         // 若期间列表被排序/过滤/编辑改动过，就按 identity 重新对齐。
         let identity = TrackIdentity(url: url)
         let expected = nowPlaying.queue.next(auto: true)
+        let expectedMatched = expected != nil
+            && nowPlaying.items.indices.contains(expected!)
+            && nowPlaying.items[expected!].identity == identity
 
-        if let expected, nowPlaying.items.indices.contains(expected), nowPlaying.items[expected].identity == identity {
-            // 队列推进的正是引擎切到的这首，不需要额外处理
-        } else if let found = nowPlaying.index(of: identity) {
+        if !expectedMatched, let found = nowPlaying.index(of: identity) {
             nowPlaying.selectInList(found)
         }
         // 都找不到：这首已经不在 PL 里了，继续播但列表里不高亮
@@ -510,6 +604,17 @@ public final class PlayerViewModel: ObservableObject {
         let track = inList
             ?? library.first { $0.identity == identity }
             ?? Track(url: url)
+
+        // E-2（§4.5）：独立状态下，如果预加载版本落后于当前编辑版本，且引擎实际切到的
+        // 这首和队列原本预判的下一首对不上，说明预加载在切歌这几毫秒里已经被编辑作废——
+        // 队列虽然已经按 identity 重新对齐，但引擎里播的还是旧的那份预加载，
+        // 必须重新 load 一次队列现在给出的这首；这一次切歌不再是无缝的。
+        if nowPlaying.state == .independent, preloadedVersion != listVersion, !expectedMatched {
+            #if DEBUG
+            print("[NowPlaying] preload invalidated by edit")
+            #endif
+            engine.load(playable(for: track), autoplay: true)
+        }
 
         playingTrack = track
         currentTime = 0
@@ -552,6 +657,7 @@ public final class PlayerViewModel: ObservableObject {
             guard let self,
                   let index = self.nowPlaying.queue.peekNext(auto: true),
                   self.nowPlaying.items.indices.contains(index) else { return nil }
+            self.preloadedVersion = self.listVersion
             return self.playable(for: self.nowPlaying.items[index])
         }
 
@@ -568,6 +674,7 @@ public final class PlayerViewModel: ObservableObject {
                 self.bumpRevision()
             } else {
                 self.stop()
+                self.collapseCurrentTrackIfOrphaned()
             }
         }
 

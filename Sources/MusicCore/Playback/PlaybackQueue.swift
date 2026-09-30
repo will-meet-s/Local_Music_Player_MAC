@@ -1,5 +1,14 @@
 import Foundation
 
+/// 列表发生结构性编辑（T-008）后，新加入曲目的插入策略。
+public enum EditPlacement {
+    case afterCurrent
+    case atResume
+    case atStart
+    case randomInRemainder
+    case keepNatural
+}
+
 /// 根据播放模式计算「下一首 / 上一首」的索引。
 ///
 /// 只关心索引，不持有曲目数据，因此可以脱离音频完全单测。
@@ -24,11 +33,29 @@ public struct PlaybackQueue {
     ///
     /// 存曲目下标而不是顺序表位置，是因为顺序表会随排序 / 洗牌重建。
     private var parkedIndex: Int?
+    /// 当前曲目已被移除、还没放完时，放完后从顺序表的哪个位置接着走（顺序表下标）。
+    /// 只由 `applyEdit` 设置；与 `parkedIndex` 互斥（同一时刻只有一个生效）。
+    private var resumeAt: Int?
 
     public init(count: Int = 0, mode: PlayMode = .sequential) {
         self.count = count
         self.mode = mode
         rebuildOrder()
+    }
+
+    /// 正在放的歌已被移除、还没放完（`resumeAt`），或跟随状态下正在放的歌被搜索过滤掉
+    /// 后停靠着（`parkedIndex`）时，续播点对应的 items 下标；越界时返回 `count`
+    /// （表示「接在末尾」）；两者都没有时返回 nil。`applyEdit` 会把 `parkedIndex`
+    /// 换算成真正的 `resumeAt`，这里只是给编辑操作的调用方一个统一的只读入口，
+    /// 不改变内部状态。
+    public var pendingResumeItemIndex: Int? {
+        if let resumeAt {
+            return resumeAt < order.count ? order[resumeAt] : count
+        }
+        if let parkedIndex {
+            return parkedIndex < count ? parkedIndex : count
+        }
+        return nil
     }
 
     /// 曲目列表变化后调用。当前曲目若已越界则清空。
@@ -37,6 +64,7 @@ public struct PlaybackQueue {
         if let c = current, c >= count {
             current = nil
         }
+        resumeAt = nil
         rebuildOrder()
     }
 
@@ -45,6 +73,7 @@ public struct PlaybackQueue {
         current = nil
         position = 0
         parkedIndex = nil
+        resumeAt = nil
     }
 
     /// 当前曲目从列表中消失（被删除或被搜索过滤）时，把队列停靠在它原来的序号上。
@@ -57,6 +86,7 @@ public struct PlaybackQueue {
         current = nil
         position = 0
         parkedIndex = count > 0 ? max(0, index) : nil
+        resumeAt = nil
     }
 
     /// 用户直接点选某首歌。
@@ -65,12 +95,13 @@ public struct PlaybackQueue {
         current = index
         position = order.firstIndex(of: index) ?? 0
         parkedIndex = nil
+        resumeAt = nil
     }
 
     /// 跟随状态下搜索、排序、刷新后重新对齐当前曲目。
     ///
-    /// 与 `select` 相同，但不清除 `resumeAt`（T-008 引入 `resumeAt` 之后生效；
-    /// 跟随状态没有编辑操作，此刻两者行为一致）。
+    /// 与 `select` 相同，但不清除 `resumeAt`（跟随状态没有编辑操作，`resumeAt`
+    /// 此刻恒为 nil，两者行为一致）。
     public mutating func realign(_ index: Int) {
         guard index >= 0 && index < count else { return }
         current = index
@@ -88,7 +119,10 @@ public struct PlaybackQueue {
     /// 代价是每轮有且仅有一次切歌拿不到无缝。
     public func peekNext(auto: Bool) -> Int? {
         guard count > 0 else { return nil }
-        guard let c = current else { return parkedTarget }
+        guard let c = current else {
+            if resumeAt != nil { return peekResumeNext() }
+            return parkedTarget
+        }
 
         if auto && mode == .repeatOne { return c }
 
@@ -109,7 +143,10 @@ public struct PlaybackQueue {
     /// - Returns: 下一首的索引；顺序播放到达末尾时返回 nil，表示应停止播放。
     public mutating func next(auto: Bool) -> Int? {
         guard count > 0 else { return nil }
-        guard let c = current else { return selectFirst() }
+        guard let c = current else {
+            if resumeAt != nil { return resumeNext() }
+            return selectFirst()
+        }
 
         if auto && mode == .repeatOne { return c }
 
@@ -128,7 +165,10 @@ public struct PlaybackQueue {
     /// 上一首。顺序播放停在第一首，其余模式环绕到末尾。
     public mutating func previous() -> Int? {
         guard count > 0 else { return nil }
-        guard current != nil else { return selectFirst() }
+        guard current != nil else {
+            if resumeAt != nil { return resumePrevious() }
+            return selectFirst()
+        }
 
         if position - 1 >= 0 {
             position -= 1
@@ -141,7 +181,226 @@ public struct PlaybackQueue {
         return current
     }
 
-    /// 没有选中项时该从哪首开始。
+    // MARK: - T-008：结构性编辑
+
+    /// 列表发生结构性编辑（插入、移除、挪动）后调用。
+    ///
+    /// - Parameters:
+    ///   - map: 旧下标 → 新下标；nil 表示这首在编辑后被移除。长度等于编辑前的 `count`。
+    ///   - newCount: 编辑后的曲目总数。
+    ///   - added: 新出现的下标（新列表里的下标），按插入顺序排列。
+    ///   - placement: 新曲目的插入策略；`added` 为空时忽略。
+    ///   - relocated: 已经在列表里、被挪了位置的新下标（随机模式下，本轮已经放过的部分
+    ///     要重新算作没放过，见方案 §2.3）；挪的是当前曲目时不受这条规则影响。
+    public mutating func applyEdit(
+        map: [Int?],
+        newCount: Int,
+        added: [Int],
+        placement: EditPlacement,
+        relocated: Set<Int>
+    ) {
+        let wasRandom = (mode == .shuffle)
+        let oldOrder = order
+        let oldPosition = position
+        let oldCurrent = current
+
+        // 编辑前「没有当前曲目」时，把停靠点统一换算成 resumeAt（以旧顺序表位置计）。
+        var effectiveOldResumeAt: Int?
+        if oldCurrent == nil {
+            if let r = resumeAt {
+                effectiveOldResumeAt = r
+            } else if let p = parkedIndex {
+                effectiveOldResumeAt = wasRandom
+                    ? (oldOrder.firstIndex(of: p) ?? oldOrder.count)
+                    : min(p, oldOrder.count)
+            }
+        }
+
+        // Step 1：构建新顺序表（还不含新曲目）。
+        // 非随机：自然顺序，天然等于最终顺序表。
+        // 随机：按 map 重映射旧顺序表，删掉被移除的，其余相对顺序不变。
+        var newOrder: [Int] = wasRandom
+            ? oldOrder.compactMap { map[$0] }
+            : Array(0..<newCount)
+
+        // Step 2：当前曲目
+        var newCurrent: Int?
+        var newPosition = 0
+        var newResumeAt: Int?
+
+        if let c = oldCurrent, let mappedC = map[c] {
+            // 当前曲目还在：随机模式下它在顺序表里的位置不变
+            // （newOrder 由 oldOrder 逐项重映射得到，相对位置天然保留）。
+            newCurrent = mappedC
+            newPosition = wasRandom ? (newOrder.firstIndex(of: mappedC) ?? 0) : mappedC
+        } else if oldCurrent != nil {
+            // 当前曲目被移除：resumeAt = 那一段之后第一首还留着的歌在新顺序表里的位置
+            newResumeAt = Self.findSurvivorPosition(
+                startingAt: oldPosition + 1, oldOrder: oldOrder, map: map, newOrder: newOrder, newCount: newCount
+            )
+        } else if let r = effectiveOldResumeAt {
+            // 编辑前已经没有当前曲目，顺着旧的停靠点往后找
+            newResumeAt = Self.findSurvivorPosition(
+                startingAt: r, oldOrder: oldOrder, map: map, newOrder: newOrder, newCount: newCount
+            )
+        }
+        // 三者都不成立（一直没有当前曲目，也没有任何停靠点）：newCurrent、newResumeAt 都保持 nil
+
+        // Step 3：随机模式下，本轮已经放过、又被挪动过的曲目要重新算作没放过
+        // （当前曲目自己不受这条规则影响）。
+        if wasRandom, let curIdx = newCurrent {
+            let curPos = newOrder.firstIndex(of: curIdx) ?? 0
+            let alreadyPlayed = relocated.filter { idx in
+                guard idx != curIdx, let posInNew = newOrder.firstIndex(of: idx) else { return false }
+                return posInNew < curPos
+            }
+            if !alreadyPlayed.isEmpty {
+                let toReinsert = Set(alreadyPlayed)
+                newOrder.removeAll { toReinsert.contains($0) }
+                let refreshedCurPos = newOrder.firstIndex(of: curIdx) ?? 0
+                for idx in alreadyPlayed {
+                    let low = refreshedCurPos + 1
+                    let insertAt = low < newOrder.count ? Int.random(in: low...newOrder.count) : newOrder.count
+                    newOrder.insert(idx, at: insertAt)
+                }
+                newPosition = newOrder.firstIndex(of: curIdx) ?? refreshedCurPos
+            }
+        }
+
+        // Step 4：插入新曲目
+        if !added.isEmpty {
+            switch placement {
+            case .afterCurrent:
+                // 非随机：新曲目已经在自然顺序里，不需要改 newOrder。
+                if wasRandom, newCurrent != nil {
+                    var insertAt = newPosition + 1
+                    for idx in added {
+                        let clamped = min(insertAt, newOrder.count)
+                        newOrder.insert(idx, at: clamped)
+                        insertAt = clamped + 1
+                    }
+                }
+
+            case .atStart:
+                // 非随机：新曲目天然在自然顺序开头，不需要改 newOrder。
+                if wasRandom {
+                    newOrder.insert(contentsOf: added, at: 0)
+                }
+
+            case .atResume:
+                if wasRandom {
+                    let insertAt = min(newResumeAt ?? newOrder.count, newOrder.count)
+                    newOrder.insert(contentsOf: added, at: insertAt)
+                    newResumeAt = insertAt
+                } else {
+                    // 非随机：新曲目已经物理插在正确位置（自然顺序 = items 下标）；
+                    // resumeAt 不能沿用 Step 2 算出的「旧停靠点对应曲目的新下标」
+                    // （那指向的是插入点之后的那首），必须直接指向第一首新曲目自己。
+                    newResumeAt = added.first
+                }
+
+            case .randomInRemainder:
+                // 非随机：新曲目已经物理追加在末尾，不需要改 newOrder。
+                if wasRandom {
+                    let lowerBound = (newCurrent.flatMap { newOrder.firstIndex(of: $0) } ?? -1) + 1
+                    for idx in added {
+                        let insertAt = lowerBound < newOrder.count ? Int.random(in: lowerBound...newOrder.count) : newOrder.count
+                        newOrder.insert(idx, at: insertAt)
+                    }
+                }
+
+            case .keepNatural:
+                break // move 操作不新增曲目
+            }
+
+            // 随机模式下插入可能改变了当前曲目在顺序表里的位置（例如插在它前面），统一刷新一次。
+            if wasRandom, let curIdx = newCurrent {
+                newPosition = newOrder.firstIndex(of: curIdx) ?? newPosition
+            }
+        }
+
+        order = newOrder
+        current = newCurrent
+        position = newPosition
+        resumeAt = newResumeAt
+        parkedIndex = nil
+        count = newCount
+    }
+
+    /// 从旧顺序表的 `start` 位置起（含）往后找第一首在 `map` 里仍然存活的曲目，
+    /// 返回它在新顺序表里的位置；找不到就返回 `newCount`（表示「接在末尾」）。
+    private static func findSurvivorPosition(
+        startingAt start: Int, oldOrder: [Int], map: [Int?], newOrder: [Int], newCount: Int
+    ) -> Int {
+        var q = max(0, start)
+        while q < oldOrder.count {
+            let oldItemIdx = oldOrder[q]
+            if let newItemIdx = map[oldItemIdx], let posInNew = newOrder.firstIndex(of: newItemIdx) {
+                return posInNew
+            }
+            q += 1
+        }
+        return newCount
+    }
+
+    // MARK: - resumeAt 的使用（只在 current == nil 且 resumeAt != nil 时生效）
+
+    private func peekResumeNext() -> Int? {
+        guard let r = resumeAt else { return nil }
+        if r < order.count { return order[r] }
+        switch mode {
+        case .sequential: return nil
+        case .repeatAll, .repeatOne: return order.first
+        case .shuffle: return nil // 下一轮顺序要到真正推进时才洗出来，预看放弃
+        }
+    }
+
+    private mutating func resumeNext() -> Int? {
+        guard let r = resumeAt else { return nil }
+        if r < order.count {
+            position = r
+            current = order[r]
+            resumeAt = nil
+            return current
+        }
+        resumeAt = nil
+        switch mode {
+        case .sequential:
+            return nil
+        case .repeatAll, .repeatOne:
+            position = 0
+            current = order.first
+            return current
+        case .shuffle:
+            reshuffleKeepingNothing()
+            position = 0
+            current = order.first
+            return current
+        }
+    }
+
+    private mutating func resumePrevious() -> Int? {
+        guard let r = resumeAt else { return nil }
+        let targetPos = r - 1
+        if targetPos >= 0 {
+            position = targetPos
+            current = order[targetPos]
+            resumeAt = nil
+            return current
+        }
+        resumeAt = nil
+        switch mode {
+        case .sequential:
+            return nil
+        case .repeatAll, .repeatOne, .shuffle:
+            guard !order.isEmpty else { return nil }
+            position = order.count - 1
+            current = order[position]
+            return current
+        }
+    }
+
+    /// 没有选中项时该从哪首开始（`parkedIndex` 路径，供跟随状态使用）。
     ///
     /// - 有停靠点且仍在列表内 → 就从它开始
     /// - 有停靠点但已超出列表长度（列表缩短了）→ 等同播到结尾：

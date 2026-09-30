@@ -332,4 +332,23 @@ final class PlaybackQueueTests: XCTestCase {
         XCTAssertEqual(q.current, 2)
         XCTAssertEqual(q.next(auto: true), 3, "重新对齐后旧的停靠点应失效")
     }
+
+    // MARK: - pendingResumeItemIndex（T-008：统一给编辑操作一个续播点的只读入口）
+
+    func testPendingResumeItemIndexIsNilWithoutParkOrResumePoint() {
+        let q = PlaybackQueue(count: 5, mode: .sequential)
+        XCTAssertNil(q.pendingResumeItemIndex)
+    }
+
+    func testPendingResumeItemIndexReflectsParkedIndexWhenNoResumeAt() {
+        var q = PlaybackQueue(count: 10, mode: .sequential)
+        q.park(at: 5)
+        XCTAssertEqual(q.pendingResumeItemIndex, 5, "跟随状态下停靠着时，也应能作为编辑操作的续播点")
+    }
+
+    func testPendingResumeItemIndexClampsParkedIndexBeyondCount() {
+        var q = PlaybackQueue(count: 3, mode: .sequential)
+        q.park(at: 99)
+        XCTAssertEqual(q.pendingResumeItemIndex, 3, "越界的停靠点等同于「接在末尾」，即 count")
+    }
 }

@@ -1,9 +1,9 @@
 import SwiftUI
 
-/// 左侧曲目列表：搜索框 + 排序控件 + 列表。单击选中，双击播放。
+/// 左侧曲目列表：搜索框 + 排序控件 + 列表。单击选中（支持 ⌘ / Shift 多选），双击播放。
 struct TrackListView: View {
     @EnvironmentObject private var vm: PlayerViewModel
-    @State private var selection: URL?
+    @State private var selection = Set<URL>()
 
     var body: some View {
         VStack(spacing: 0) {
@@ -26,15 +26,20 @@ struct TrackListView: View {
                     ForEach(Array(vm.tracks.enumerated()), id: \.element.id) { index, track in
                         TrackRow(track: track, isCurrent: index == vm.currentIndex, isPlaying: vm.isPlaying)
                             .tag(track.id)
-                            .contentShape(Rectangle())
-                            .onTapGesture(count: 2) {
-                                vm.play(at: index)
-                            }
                     }
                 }
                 .listStyle(.inset)
                 // List 默认铺一层不透明背景，会把磨砂盖掉
                 .scrollContentBackground(.hidden)
+                // 双击播放；右键菜单作用于右键时的选中集合，在未选中的行上右键只作用于这一行
+                // （contextMenu(forSelectionType:) 的默认行为）。
+                .contextMenu(forSelectionType: URL.self) { urls in
+                    contextMenuItems(for: urls)
+                } primaryAction: { urls in
+                    guard urls.count == 1, let url = urls.first,
+                          let index = vm.tracks.firstIndex(where: { $0.id == url }) else { return }
+                    vm.play(at: index)
+                }
                 // List 在内容变化时会保留原来的滚动偏移，搜索或改排序之后
                 // 看到的是列表中段，必须手动回顶。
                 .onChange(of: vm.searchText) { _, _ in scrollToTop(proxy) }
@@ -42,6 +47,13 @@ struct TrackListView: View {
                 .onChange(of: vm.sortAscending) { _, _ in scrollToTop(proxy) }
             }
         }
+    }
+
+    @ViewBuilder
+    private func contextMenuItems(for urls: Set<URL>) -> some View {
+        let selected = SelectionOrder.byListOrder(urls, in: vm.tracks)
+        Button("下一首播放") { vm.playNext(selected) }
+        Button("添加到播放列表末尾") { vm.appendToNowPlaying(selected) }
     }
 
     /// 新的行还没完成布局就 scrollTo 会没反应，所以放到下一个 runloop。
