@@ -121,10 +121,31 @@ final class AvailabilityCheckerTests: XCTestCase {
         }
     }
 
+    // F-14：一个卷卡住不该拖累本机文件——各卷根一条独立队列，互不阻塞。
+    func testStuckVolumeDoesNotBlockLocalFileCheck() async throws {
+        let store = AvailabilityStore()
+        let probe = FakeFileProbe(existingPaths: ["/Music/A.mp3"], stuckVolumes: ["/Volumes/Stuck"])
+        let checker = AvailabilityChecker(store: store, probe: probe)
+
+        // 先让「卷卡住」的探测占住它自己的那条队列。
+        Task { _ = await checker.checkNow(track("/Volumes/Stuck/X.mp3")) }
+        try await Task.sleep(nanoseconds: 200_000_000)
+
+        let localTrack = track("/Music/A.mp3")
+        let start = Date()
+        let result = await checker.checkNow(localTrack)
+        let elapsed = Date().timeIntervalSince(start)
+
+        XCTAssertTrue(result, "本机文件存在，不应该被卡住的卷拖累判成不可用")
+        XCTAssertLessThan(elapsed, 1, "本机文件的检查不该排在卡住的卷后面等")
+    }
+
     // #5：10 秒后卷恢复，再检查 → 恢复为可用
     func testVolumeRecoversAfterCacheExpires() async throws {
         let store = AvailabilityStore()
-        let probe = FakeFileProbe()
+        // F-15：卷恢复之后，文件本身也得在 existingPaths 里，不然就算卷可达判断
+        // 完全正确，fileExists 这一步还是会返回 false，白测了卷缓存那部分。
+        let probe = FakeFileProbe(existingPaths: ["/Volumes/Flaky/A.mp3"])
         let checker = AvailabilityChecker(store: store, probe: probe)
         let t = track("/Volumes/Flaky/A.mp3")
 

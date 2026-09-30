@@ -327,26 +327,27 @@ final class NowPlayingListTests: XCTestCase {
         let all = (0..<5).map { track("M\($0)") }
         list.playFromLibrary(all, at: 0)
 
+        // F-16：不依赖随机的起点。playFromLibrary 之后当前曲目落在顺序表哪一位是
+        // 随机的，之前用「next() 两次」推进，万一半路越过本轮末尾触发重新洗牌，
+        // 「已播放」的那首可能变成新的当前曲目、或者排到当前曲目后面，
+        // fromIndex 也可能恰好等于 count - 1 让 move 变成无操作——同一类原因已经
+        // 在 CI 上偶发失败 4 次。先把当前曲目固定到顺序表第一位，5 首歌连续
+        // next() 两次必然不会越过本轮末尾，行为完全确定。
+        list.selectInList(list.queue.currentOrder[0])
+        let playedIdentity = list.items[list.queue.currentOrder[1]].identity
+
         _ = list.queue.next(auto: true) // 播完第 1 首
-        guard let playedIdx = list.queue.current else { return XCTFail("应有当前曲目") }
-        let playedIdentity = list.items[playedIdx].identity
         _ = list.queue.next(auto: true) // 播完第 2 首，当前第 3 首
 
         guard let fromIndex = list.items.firstIndex(where: { $0.identity == playedIdentity }) else {
             return XCTFail("应能找到已播放的那首")
         }
-        // items 数组本身不随机洗牌（洗的是 queue.order 这张播放顺序表），已播放的
-        // 那首有 1/4 的概率本来就在 items 的最后一位——这时候 move(from:to:) 的
-        // from == to，属于合法的无操作（这条用例在 CI 上因此偶发失败过一次，
-        // 断言的是 move() 本身的契约，不是这条用例想测的「挪动后还在」这件事）。
-        // 挑一个保证跟 fromIndex 不同的目标位置，消除这个巧合。
-        let toIndex = fromIndex == list.items.count - 1 ? 0 : list.items.count - 1
+        // 目标位置保证和 fromIndex 不同，不依赖随机结果，move 一定会真的发生。
+        let toIndex = fromIndex == 0 ? 1 : 0
         let result = list.move(from: fromIndex, to: toIndex)
         XCTAssertTrue(result.changed)
 
-        // 直接看顺序表「当前之后」的部分有没有恰好一次这首——而不是调用 next() 数
-        // 出对应次数：调用次数一旦数错就会跨进下一轮（随机重新洗牌），那一轮完全
-        // 可能又抽到同一首，是不必要的脆弱点（这条用例在 CI 上因此偶发失败过一次）。
+        // 直接看顺序表「当前之后」的部分有没有恰好一次这首，而不是靠调用次数推断。
         guard let curItemsIdx = list.queue.current,
               let curPos = list.queue.currentOrder.firstIndex(of: curItemsIdx) else {
             return XCTFail("应有当前曲目")
