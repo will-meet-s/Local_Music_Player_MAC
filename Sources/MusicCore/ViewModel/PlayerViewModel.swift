@@ -251,7 +251,7 @@ public final class PlayerViewModel: ObservableObject {
 
                 // 列表可能已被重新扫描，按 URL 校验后再写回
                 guard self.library.indices.contains(index),
-                      self.library[index].url == loaded.url else { continue }
+                      self.library[index].identity == loaded.identity else { continue }
                 self.library[index] = loaded
                 self.applyLoadedMetadataToDisplayed(loaded)
             }
@@ -266,11 +266,11 @@ public final class PlayerViewModel: ObservableObject {
 
     /// 把刚加载好的元数据同步到展示列表和「正在播放」，不改变顺序。
     private func applyLoadedMetadataToDisplayed(_ loaded: Track) {
-        if let i = tracks.firstIndex(where: { $0.url == loaded.url }) {
+        if let i = tracks.firstIndex(where: { $0.identity == loaded.identity }) {
             tracks[i] = loaded
         }
 
-        guard playingTrack?.url == loaded.url else { return }
+        guard playingTrack?.identity == loaded.identity else { return }
         playingTrack = loaded
         refreshLyrics(for: loaded)
         if duration == 0 { duration = loaded.duration }
@@ -295,8 +295,8 @@ public final class PlayerViewModel: ObservableObject {
 
         queue.setCount(tracks.count)
 
-        if let playingURL = playingTrack?.url,
-           let index = tracks.firstIndex(where: { $0.url == playingURL }) {
+        if let playingIdentity = playingTrack?.identity,
+           let index = tracks.firstIndex(where: { $0.identity == playingIdentity }) {
             queue.select(index)
             currentIndex = index
         } else {
@@ -321,11 +321,11 @@ public final class PlayerViewModel: ObservableObject {
     /// 判据是**曲库**而不是展示列表 —— 被搜索过滤掉不等于文件没了，
     /// 只有重扫后曲库里都找不到，才说明文件真的被删除或移走了。
     private func updatePlayingTrackMissing() {
-        guard let url = playingTrack?.url else {
+        guard let identity = playingTrack?.identity else {
             playingTrackMissing = false
             return
         }
-        playingTrackMissing = !library.contains { $0.url == url }
+        playingTrackMissing = !library.contains { $0.identity == identity }
     }
 
     public func clearSearch() {
@@ -421,10 +421,11 @@ public final class PlayerViewModel: ObservableObject {
         // 推进播放队列。正常情况它给出的就是引擎已经切到的那首；
         // 若期间列表被排序/过滤改动过，就按 URL 重新对齐。
         let expected = queue.next(auto: true)
+        let identity = TrackIdentity(url: url)
 
-        if let expected, tracks.indices.contains(expected), tracks[expected].url == url {
+        if let expected, tracks.indices.contains(expected), tracks[expected].identity == identity {
             currentIndex = expected
-        } else if let found = tracks.firstIndex(where: { $0.url == url }) {
+        } else if let found = tracks.firstIndex(where: { $0.identity == identity }) {
             queue.select(found)
             currentIndex = found
         } else {
@@ -433,7 +434,7 @@ public final class PlayerViewModel: ObservableObject {
         }
 
         let track = currentIndex.map { tracks[$0] }
-            ?? library.first { $0.url == url }
+            ?? library.first { $0.identity == identity }
             ?? Track(url: url)
 
         playingTrack = track
