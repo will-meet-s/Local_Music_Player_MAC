@@ -2,7 +2,7 @@ name: macOS CI
 
 on:
   push:
-    branches: ['feature/**']
+    branches: ['feature/**', 'ci/baseline']
   pull_request:
     branches: [main]
   workflow_dispatch:
@@ -49,6 +49,7 @@ jobs:
         run: |
           ref="${GITHUB_HEAD_REF:-$GITHUB_REF_NAME}"
           echo "artifact=MacMusicPlayer-${ref//\//-}-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+          if [[ "$ref" == "ci/baseline" ]]; then echo "days=90"; else echo "days=14"; fi >> "$GITHUB_OUTPUT"
 
       - name: 上传安装包
         uses: actions/upload-artifact@v4
@@ -56,4 +57,4 @@ jobs:
           name: ${{ steps.name.outputs.artifact }}
           path: build/MacMusicPlayer-${{ env.VERSION }}.dmg
           if-no-files-found: error
-          retention-days: 14
+          retention-days: ${{ steps.name.outputs.days }}
