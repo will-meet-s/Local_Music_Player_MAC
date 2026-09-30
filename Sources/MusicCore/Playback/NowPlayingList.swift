@@ -36,6 +36,11 @@ public struct NowPlayingList {
     /// `items` 里 identity 到下标的索引，随 `items` 整体更新一起重建，O(1) 查找。
     private var identityIndex: [TrackIdentity: Int] = [:]
 
+    /// 跟随状态下，扫描完成后的第一次同步要定位的曲目（T-010，重启恢复用）。
+    /// 用完即清：不管找没找到，`syncFromLibrary` 里 `playing == nil` 的那次尝试
+    /// 之后都会把它清空，不会一直占着、影响之后的搜索/排序/刷新。
+    public var pendingFollowCurrent: TrackIdentity?
+
     public init(mode: PlayMode) {
         self.queue = PlaybackQueue(count: 0, mode: mode)
     }
@@ -48,12 +53,23 @@ public struct NowPlayingList {
     // MARK: - T-001
 
     /// 跟随状态下由 `rebuildDisplayed` 调用；逻辑与基线 `rebuildDisplayed` 里对 queue 的处理逐行相同。
+    ///
+    /// T-010：`playing == nil` 且 `pendingFollowCurrent` 有值时（重启恢复后的第一次
+    /// 同步），优先用它定位，找到就 `select`；这个分支只在 `playing` 为 nil 时生效，
+    /// `playing` 非空但没找到（被搜索过滤掉）时仍然走原来的 `previousIndex` 逻辑。
     public mutating func syncFromLibrary(_ displayed: [Track], playing: TrackIdentity?, previousIndex: Int?) {
         setItems(displayed)
         queue.setCount(items.count)
 
         if let playing, let index = identityIndex[playing] {
             queue.realign(index)
+        } else if playing == nil, let pending = pendingFollowCurrent {
+            if let index = identityIndex[pending] {
+                queue.select(index)
+            } else {
+                queue.clearSelection()
+            }
+            pendingFollowCurrent = nil
         } else if let previousIndex {
             queue.park(at: previousIndex)
         } else {
@@ -92,6 +108,37 @@ public struct NowPlayingList {
     /// 切换曲库文件夹（FR-024 ③，T-009 验收）：独立状态保留 items，queue.clearSelection()。
     public mutating func detachCurrent() {
         queue.clearSelection()
+    }
+
+    // MARK: - T-010：重启恢复播放列表
+
+    /// 生成用于持久化的快照。`currentTrack` 是调用方（`PlayerViewModel`）的
+    /// `playingTrack`——按 §3.1，Mac 上的「当前曲目」就是它，不是 `queue.current`
+    /// 反查出来的曲目。跟随状态下 `items` 固定为空，不保存曲库镜像（方案 §3）。
+    public func snapshot(currentTrack: Track?) -> NowPlayingSnapshot {
+        let persistedItems: [SonglistEntry] = state == .independent
+            ? items.map {
+                SonglistEntry(path: $0.url.path, title: $0.title, artist: $0.artist, album: $0.album, duration: $0.duration)
+            }
+            : []
+        return NowPlayingSnapshot(
+            state: state, source: source, currentPath: currentTrack?.url.path, items: persistedItems
+        )
+    }
+
+    /// 恢复独立状态（T-010）：`state = .independent`，`source` 按快照；`current`
+    /// 有值时 `queue.select`，不触发播放——调用方负责设置 `playingTrack`，
+    /// 不调用 `engine.load`（不自动播放、不恢复进度，方案 §4.2）。
+    public mutating func restoreIndependent(_ items: [Track], current: Int?, source: NowPlayingSource) {
+        state = .independent
+        self.source = source
+        setItems(items)
+        queue.setCount(self.items.count)
+        if let current {
+            queue.select(current)
+        } else {
+            queue.clearSelection()
+        }
     }
 
     // MARK: - T-008：编辑操作

@@ -848,3 +848,71 @@ final class NowPlayingListLibraryChangesTests: XCTestCase {
         XCTAssertTrue(list.items.isEmpty, "刷新后仍为空")
     }
 }
+
+// MARK: - 重启恢复播放列表（T-010）
+//
+// snapshot()/pendingFollowCurrent/syncFromLibrary 的往返纯逻辑测试；磁盘读写见
+// NowPlayingStoreTests，那边只测 NowPlayingStore 本身，不牵涉 NowPlayingList。
+
+final class NowPlayingListRestoreTests: XCTestCase {
+
+    private func track(_ name: String) -> Track {
+        Track(url: URL(fileURLWithPath: "/Music/\(name).mp3"))
+    }
+
+    // #3：跟随状态 save——items 为空；pendingFollowCurrent 在下一次
+    // syncFromLibrary(…, playing: nil, …) 时定位到它，然后被清空。
+    func testFollowLibrarySnapshotHasEmptyItemsAndRestoreLocatesCurrentTrack() {
+        var list = NowPlayingList(mode: .sequential)
+        let library = (0..<5).map { track("E\($0)") }
+        list.playFromLibrary(library, at: 2)
+
+        let snapshot = list.snapshot(currentTrack: library[2])
+        XCTAssertEqual(snapshot.state, .followLibrary)
+        XCTAssertTrue(snapshot.items.isEmpty, "跟随状态下不保存曲库镜像")
+        XCTAssertEqual(snapshot.currentPath, library[2].url.path)
+
+        // 模拟重启恢复：新的 NowPlayingList 设置 pendingFollowCurrent，随后
+        // restoreLastSession 扫描完成时的第一次 syncFromLibrary 应该定位到它。
+        var restored = NowPlayingList(mode: .sequential)
+        restored.pendingFollowCurrent = TrackIdentity(path: snapshot.currentPath!)
+        restored.syncFromLibrary(library, playing: nil, previousIndex: nil)
+
+        XCTAssertEqual(restored.queue.current, 2)
+        XCTAssertNil(restored.pendingFollowCurrent, "用完应该清空")
+    }
+
+    // #4：跟随，但 currentPath 不在新曲库里——没有当前曲目，pendingFollowCurrent 被清空。
+    func testPendingFollowCurrentClearedWhenTrackNotFoundInNewLibrary() {
+        var restored = NowPlayingList(mode: .sequential)
+        restored.pendingFollowCurrent = TrackIdentity(path: "/Music/NotHere.mp3")
+        let library = (0..<3).map { track("F\($0)") }
+        restored.syncFromLibrary(library, playing: nil, previousIndex: nil)
+
+        XCTAssertNil(restored.queue.current, "找不到应该没有当前曲目")
+        XCTAssertNil(restored.pendingFollowCurrent, "找不到也应该清空，不能一直占着")
+    }
+
+    // 额外：独立状态的快照往返（配合 NowPlayingStoreTests #1，这里只验证
+    // NowPlayingList.snapshot()/restoreIndependent() 本身，不牵涉磁盘）。
+    func testIndependentSnapshotAndRestoreRoundTrip() {
+        var list = NowPlayingList(mode: .sequential)
+        let snapshot = (0..<6).map { track("G\($0)") }
+        list.playFromSonglist(snapshot, at: 3, name: "通勤")
+
+        let saved = list.snapshot(currentTrack: list.items[3])
+        XCTAssertEqual(saved.state, .independent)
+        XCTAssertEqual(saved.source, .songlist(name: "通勤"))
+        XCTAssertEqual(saved.items.map(\.path), snapshot.map { $0.url.path })
+        XCTAssertEqual(saved.currentPath, snapshot[3].url.path)
+
+        var restored = NowPlayingList(mode: .sequential)
+        let restoredItems = snapshot // 同样的曲目，模拟从快照重建 Track
+        restored.restoreIndependent(restoredItems, current: 3, source: saved.source)
+
+        XCTAssertEqual(restored.state, .independent)
+        XCTAssertEqual(restored.source, .songlist(name: "通勤"))
+        XCTAssertEqual(restored.items.map(\.identity), restoredItems.map(\.identity))
+        XCTAssertEqual(restored.queue.current, 3)
+    }
+}

@@ -329,7 +329,9 @@ struct POSIXIOError: Error {
 ///
 /// 不用 `Data.write(to:options:.atomic)`：它不 `fsync`，也不保证临时文件和目标在同一目录。
 /// 不用 `FileManager.replaceItemAt`：只读目录里的行为和错误码不稳定，还会生成备份文件。
-private func writeAtomically(
+///
+/// internal（非 private）：T-010 的 `NowPlayingStore` 复用同一套原子写实现（方案 §6）。
+func writeAtomically(
     _ data: Data,
     tempURL: URL,
     finalURL: URL,

@@ -40,6 +40,9 @@ public struct ContentView: View {
         }
         .frostedBackground(opacity: vm.backgroundOpacity)
         .task {
+            // T-010：必须在 restoreLastSession() 之前完成，否则扫描后的第一次
+            // 同步会错过 pendingFollowCurrent。
+            await vm.restoreNowPlaying()
             vm.restoreLastSession()
             songlists.playerViewModel = vm
             await songlists.loadAll()

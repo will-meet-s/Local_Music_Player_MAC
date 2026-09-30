@@ -1,6 +1,7 @@
 import Foundation
 import SwiftUI
 import AppKit
+import Combine
 
 /// UI 的唯一数据源：串联扫描、元数据、歌词、播放队列与播放引擎。
 ///
@@ -181,6 +182,15 @@ public final class PlayerViewModel: ObservableObject {
     /// `provideNext` 把下一首塞进引擎缓冲时记下当时的 `listVersion`。
     private var preloadedVersion = 0
 
+    // MARK: - 重启恢复播放列表（T-010）
+
+    private let nowPlayingStore = NowPlayingStore()
+    private var cancellables = Set<AnyCancellable>()
+    /// `restoreNowPlaying` 只执行一次，和 `restoreLastSession` 一样用 guard。
+    private var nowPlayingRestored = false
+    /// 保存失败只提示一次（本次运行），编辑照样生效，下一次变化照常重试（FR-027 ③）。
+    private var saveFailureNotified = false
+
     public var currentTrack: Track? { playingTrack }
 
     public init() {
@@ -200,6 +210,7 @@ public final class PlayerViewModel: ObservableObject {
         engine.volume = vol
         engine.matchesOutputSampleRate = Preferences.sampleRateMatchingEnabled
         wireEngineCallbacks()
+        wireNowPlayingPersistence()
     }
 
     /// App 启动后调用：若上次的文件夹仍存在则自动重扫。
@@ -207,6 +218,92 @@ public final class PlayerViewModel: ObservableObject {
         // 视图重建时 .task 会再次触发，已经有曲库就不要重扫
         guard folderURL == nil, let folder = Preferences.lastFolder else { return }
         scan(folder: folder)
+    }
+
+    // MARK: - 重启恢复播放列表（T-010）
+
+    private func wireNowPlayingPersistence() {
+        $nowPlayingRevision
+            .dropFirst()
+            .debounce(for: .milliseconds(500), scheduler: RunLoop.main)
+            .sink { [weak self] _ in
+                self?.saveNowPlayingInBackground()
+            }
+            .store(in: &cancellables)
+
+        NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)
+            .sink { [weak self] _ in
+                self?.flushNowPlaying()
+            }
+            .store(in: &cancellables)
+    }
+
+    /// `ContentView.task` 里、`restoreLastSession()` 之前调用；只执行一次。
+    public func restoreNowPlaying() async {
+        guard !nowPlayingRestored else { return }
+        nowPlayingRestored = true
+
+        guard let snapshot = nowPlayingStore.load() else { return }
+
+        switch snapshot.state {
+        case .independent:
+            let items = snapshot.items.map { entry -> Track in
+                var track = Track(url: URL(fileURLWithPath: entry.path))
+                track.title = entry.title
+                track.artist = entry.artist
+                track.album = entry.album
+                track.duration = entry.duration
+                return track
+            }
+            let current = snapshot.currentPath.flatMap { path in items.firstIndex(where: { $0.url.path == path }) }
+            nowPlaying.restoreIndependent(items, current: current, source: snapshot.source)
+
+            // 恢复「当前曲目」但不加载引擎：不自动播放、不恢复进度（方案 §4.2，Mac 差异）。
+            if let current, items.indices.contains(current) {
+                let track = items[current]
+                playingTrack = track
+                playingTrackMissing = false
+                isPlaying = false
+                currentTime = 0
+                duration = track.duration
+                refreshLyrics(for: track)
+            }
+            recomputeCurrentIndex()
+            bumpRevision()
+            await availabilityChecker.enqueue(items, priority: .high)
+
+        case .followLibrary:
+            if let currentPath = snapshot.currentPath {
+                nowPlaying.pendingFollowCurrent = TrackIdentity(path: currentPath)
+            }
+        }
+    }
+
+    /// 每次 `nowPlayingRevision` 变化去抖 500 ms 后调用，在后台线程写盘——
+    /// `store.save` 是阻塞的磁盘 I/O（含 `fsync`），不能占用主线程。
+    private func saveNowPlayingInBackground() {
+        let snapshot = nowPlaying.snapshot(currentTrack: playingTrack)
+        let store = nowPlayingStore
+        Task.detached(priority: .utility) { [weak self] in
+            let reason = store.save(snapshot)
+            guard let reason else { return }
+            await MainActor.run {
+                self?.handleNowPlayingSaveFailure(reason)
+            }
+        }
+    }
+
+    /// 退出（`willTerminate`）时调用：取消去抖，不管有没有变化都同步写一次
+    /// （FR-028 ④）。必须同步——`willTerminate` 返回后进程就结束了。
+    public func flushNowPlaying() {
+        let snapshot = nowPlaying.snapshot(currentTrack: playingTrack)
+        _ = nowPlayingStore.save(snapshot)
+    }
+
+    private func handleNowPlayingSaveFailure(_ reason: String) {
+        guard !saveFailureNotified else { return }
+        saveFailureNotified = true
+        showNotice("播放列表未能保存，重启后可能无法恢复")
     }
 
     // MARK: - 曲库扫描
@@ -350,6 +447,9 @@ public final class PlayerViewModel: ObservableObject {
     private func rebuildDisplayed() {
         // 先记住当前曲目在旧列表里的序号，它从新列表消失时要靠这个定位
         let previousIndex = currentIndex
+        // T-010：调用 syncFromLibrary 之前先看有没有待定位的重启恢复目标——
+        // 它会在这次调用里被消费掉（找到找不到都会清空），事后没法再判断「刚刚是不是消费了它」。
+        let hadPendingFollowCurrent = nowPlaying.pendingFollowCurrent != nil
 
         tracks = TrackFilter.apply(
             to: library,
@@ -362,6 +462,20 @@ public final class PlayerViewModel: ObservableObject {
             nowPlaying.syncFromLibrary(tracks, playing: playingTrack?.identity, previousIndex: previousIndex)
             // 列表变了，预判的「下一首」可能已经不对
             engine.invalidatePreload()
+
+            // T-010：这次 syncFromLibrary 刚好消费了重启恢复的定位目标——找到了就把
+            // playingTrack 也设上，不加载引擎（方案 §4.2）；找不到（pendingFollowCurrent
+            // 被清空但 queue.current 仍是 nil）就没有当前曲目，什么都不做。
+            if hadPendingFollowCurrent, nowPlaying.pendingFollowCurrent == nil,
+               let index = nowPlaying.queue.current, nowPlaying.items.indices.contains(index) {
+                let track = nowPlaying.items[index]
+                playingTrack = track
+                playingTrackMissing = false
+                isPlaying = false
+                currentTime = 0
+                duration = track.duration
+                refreshLyrics(for: track)
+            }
         }
 
         recomputeCurrentIndex()
@@ -599,6 +713,12 @@ public final class PlayerViewModel: ObservableObject {
             if nowPlaying.queue.next(auto: false) != nil {
                 startCurrent()
             }
+            return
+        }
+        // T-010：重启恢复出来的当前曲目，引擎还没加载过（不自动播放、不恢复进度）；
+        // 基线不会出现「有当前曲目但引擎没加载」这种状态，这个分支不影响基线行为。
+        if engine.currentURL == nil {
+            startCurrent()
             return
         }
         engine.togglePlayPause()
