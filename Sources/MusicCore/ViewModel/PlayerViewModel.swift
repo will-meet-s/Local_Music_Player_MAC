@@ -579,14 +579,39 @@ public final class PlayerViewModel: ObservableObject {
 
     /// 引擎已无缝推进到下一首，这里只需把界面状态跟上。
     private func handleAutoAdvance(to url: URL) {
-        // 推进播放列表。正常情况它给出的就是引擎已经切到的那首；
-        // 若期间列表被排序/过滤/编辑改动过，就按 identity 重新对齐。
         let identity = TrackIdentity(url: url)
         let expected = nowPlaying.queue.next(auto: true)
         let expectedMatched = expected != nil
             && nowPlaying.items.indices.contains(expected!)
             && nowPlaying.items[expected!].identity == identity
 
+        // E-2（§4.5）：先判断预加载是否已经被编辑作废，如果是，直接按队列原本预判的
+        // 那首（items[expected]）重新加载——**不能**先按 identity 把队列对齐到引擎
+        // 实际切到的这首再加载，那样加载的就是同一首（刚切过去的那首），会从头重播
+        // 一遍，而编辑后本该紧接着放的那首反而被跳过了。
+        if nowPlaying.state == .independent,
+           preloadedVersion != listVersion,
+           let expected, nowPlaying.items.indices.contains(expected),
+           !expectedMatched {
+            let track = nowPlaying.items[expected]
+            #if DEBUG
+            print("[NowPlaying] preload invalidated by edit")
+            #endif
+            engine.load(playable(for: track), autoplay: true)
+            playingTrack = track
+            currentTime = 0
+            duration = track.duration
+            refreshLyrics(for: track)
+            isPlaying = true
+            consecutiveFailures = 0
+            recomputeCurrentIndex()
+            updatePlayingTrackMissing()
+            bumpRevision()
+            return
+        }
+
+        // 正常情况：队列给出的就是引擎已经切到的那首；若期间列表被排序/过滤/编辑
+        // 改动过，就按 identity 重新对齐（跟随状态完全走这条）。
         if !expectedMatched, let found = nowPlaying.index(of: identity) {
             nowPlaying.selectInList(found)
         }
@@ -604,17 +629,6 @@ public final class PlayerViewModel: ObservableObject {
         let track = inList
             ?? library.first { $0.identity == identity }
             ?? Track(url: url)
-
-        // E-2（§4.5）：独立状态下，如果预加载版本落后于当前编辑版本，且引擎实际切到的
-        // 这首和队列原本预判的下一首对不上，说明预加载在切歌这几毫秒里已经被编辑作废——
-        // 队列虽然已经按 identity 重新对齐，但引擎里播的还是旧的那份预加载，
-        // 必须重新 load 一次队列现在给出的这首；这一次切歌不再是无缝的。
-        if nowPlaying.state == .independent, preloadedVersion != listVersion, !expectedMatched {
-            #if DEBUG
-            print("[NowPlaying] preload invalidated by edit")
-            #endif
-            engine.load(playable(for: track), autoplay: true)
-        }
 
         playingTrack = track
         currentTime = 0

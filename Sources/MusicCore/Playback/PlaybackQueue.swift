@@ -188,10 +188,16 @@ public struct PlaybackQueue {
     /// - Parameters:
     ///   - map: 旧下标 → 新下标；nil 表示这首在编辑后被移除。长度等于编辑前的 `count`。
     ///   - newCount: 编辑后的曲目总数。
-    ///   - added: 新出现的下标（新列表里的下标），按插入顺序排列。
+    ///   - added: 本次要放到 `placement` 位置的**全部**曲目的新下标，按插入顺序排列
+    ///     （v2）：包括新加入的，也包括「已在列表里、被挪过来」的（例如对一首已在列表
+    ///     里的歌选「下一首播放」）；`append` 调用方要自己排除当前曲目。随机模式下，
+    ///     这里面列出的下标会先从重映射后的顺序表里摘掉，再按 `placement` 统一插入，
+    ///     这样被挪过来的曲目才会真正跳到目标位置，而不是留在旧的洗牌相对位置上。
     ///   - placement: 新曲目的插入策略；`added` 为空时忽略。
-    ///   - relocated: 已经在列表里、被挪了位置的新下标（随机模式下，本轮已经放过的部分
-    ///     要重新算作没放过，见方案 §2.3）；挪的是当前曲目时不受这条规则影响。
+    ///   - relocated: 被挪了位置、但不通过 `added`/`placement` 机制处理的新下标——
+    ///     目前只有 `move()` 会用到（随机模式下，本轮已经放过的部分要重新算作没放过，
+    ///     见方案 §2.3）；挪的是当前曲目时不受这条规则影响。`playNext`/`append`
+    ///     传 `added` 就够了，这里传空集合。
     public mutating func applyEdit(
         map: [Int?],
         newCount: Int,
@@ -267,7 +273,18 @@ public struct PlaybackQueue {
             }
         }
 
-        // Step 4：插入新曲目
+        // Step 4：插入新曲目（v2：added 现在包含「新加入的」和「已在列表里、被挪过来的」
+        // 两类——后者在 Step 1 的重映射里已经按旧的相对位置出现在 newOrder 里了，
+        // 随机模式下要先把它们摘掉，才能统一在下面按 placement 重新插入，
+        // 否则它们会留在旧位置，不会真的挪到 placement 指定的地方）。
+        if wasRandom, !added.isEmpty {
+            let addedSet = Set(added)
+            newOrder.removeAll { addedSet.contains($0) }
+            if let curIdx = newCurrent {
+                newPosition = newOrder.firstIndex(of: curIdx) ?? newPosition
+            }
+        }
+
         if !added.isEmpty {
             switch placement {
             case .afterCurrent:

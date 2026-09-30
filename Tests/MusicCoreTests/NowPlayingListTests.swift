@@ -516,7 +516,89 @@ final class NowPlayingListTests: XCTestCase {
 
         let sorted = durations.sorted()
         let median = sorted[sorted.count / 2]
-        XCTAssertLessThanOrEqual(median, 0.05, "5 次耗时：\(durations)")
+        // v2：CI 的 swift test 是 debug 构建，阈值从 50ms 放宽到 100ms；
+        // 1 万首时如果退化成 O(n²)，耗时会到秒级，100ms 仍然能发现。
+        XCTAssertLessThanOrEqual(median, 0.1, "5 次耗时：\(durations)")
+    }
+
+    // MARK: - T-008 #25（v2，F-8）：随机模式下 playNext 一首已在列表里的曲目，应紧接着播
+
+    func testShufflePlayNextOfAlreadyPresentTrackPlaysNext() {
+        var list = NowPlayingList(mode: .shuffle)
+        let all = (0..<5).map { track("S\($0)") }
+        list.playFromLibrary(all, at: 0)
+
+        _ = list.queue.next(auto: true) // 播完第 1 首
+        _ = list.queue.next(auto: true) // 播完第 2 首，当前第 3 首（对应设计里的 Z）
+
+        // 找一首「还没播过、且离当前最远」的曲目 X（本轮顺序表的最后一位），
+        // 这样如果 playNext 没有把被挪过来的曲目真的移到 placement 位置（F-8 的 bug），
+        // 它会留在原位（本轮最后一个播），下一次 next 就不会是它，测试能发现问题。
+        let currentIdentity = list.queue.current.map { list.items[$0].identity }
+        let order = list.queue.currentOrder
+        guard let curPos = list.queue.current.flatMap({ cur in order.firstIndex(of: cur) }),
+              curPos + 1 < order.count else {
+            return XCTFail("应该还有没播过的曲目")
+        }
+        let x = list.items[order[order.count - 1]]
+
+        let result = list.playNext([x], playing: currentIdentity)
+        XCTAssertTrue(result.changed)
+        XCTAssertEqual(result.relocated, 1, "X 本来就在列表里，应计入 relocated")
+
+        XCTAssertEqual(list.items[list.queue.next(auto: true)!].identity, x.identity, "应紧接着放 X")
+    }
+
+    // MARK: - T-008 #26（v2，F-8）：非随机 atResume 下，被挪过来的曲目不能被跳过
+
+    func testRemoveCurrentThenPlayNextOfExistingTrackIsNotSkipped() {
+        var list = NowPlayingList(mode: .sequential)
+        let abcd = ["A", "B", "C", "D"].map { track($0) }
+        list.playFromLibrary(abcd, at: 1) // 当前 B
+
+        _ = list.remove(at: IndexSet([1])) // 剩 A C D，续播点指向 C
+        XCTAssertNil(list.queue.current)
+
+        // D 已经在列表里，playNext([D]) 应该把它挪到续播点，而不是被当成「非新曲目」
+        // 整个丢在原地（F-8 之前的 bug：resumeAt 仍指向 C，D 被跳过）
+        let result = list.playNext([abcd[3]], playing: nil)
+        XCTAssertTrue(result.changed)
+        XCTAssertEqual(result.relocated, 1)
+        XCTAssertEqual(list.items.map(\.identity), [abcd[0], abcd[3], abcd[2]].map(\.identity), "应变成 [A, D, C]")
+
+        XCTAssertEqual(list.items[list.queue.next(auto: true)!].identity, abcd[3].identity, "先 D")
+        XCTAssertEqual(list.items[list.queue.next(auto: true)!].identity, abcd[2].identity, "再 C")
+    }
+
+    // MARK: - T-008 #27（v2）：随机模式下 append([当前曲目, W])，当前曲目位置不变、播放不中断
+
+    func testShuffleAppendIncludingCurrentTrackKeepsItsRoundPosition() {
+        var list = NowPlayingList(mode: .shuffle)
+        let three = (0..<3).map { track("A\($0)") }
+        list.playFromLibrary(three, at: 0)
+
+        guard let curIdx = list.queue.current else { return XCTFail("应有当前曲目") }
+        let currentIdentity = list.items[curIdx].identity
+        let currentPositionBefore = list.queue.currentOrder.firstIndex(of: curIdx)
+
+        // W 在前、当前曲目在后，这样「挪到末尾」可以直接断言 items.last。
+        let w = track("W")
+        let result = list.append([w, list.items[curIdx]], playing: currentIdentity)
+        XCTAssertTrue(result.changed)
+        XCTAssertEqual(result.relocated, 1, "当前曲目本来就在列表里，应计入 relocated")
+        XCTAssertEqual(result.inserted, 1, "只有 W 是真正新增的")
+
+        XCTAssertEqual(list.items.last?.identity, currentIdentity, "当前曲目应挪到末尾")
+        XCTAssertEqual(list.queue.current, list.index(of: currentIdentity), "播放不中断，current 跟到新下标")
+
+        guard let newCurIdx = list.queue.current,
+              let currentPositionAfter = list.queue.currentOrder.firstIndex(of: newCurIdx) else {
+            return XCTFail("应有当前曲目")
+        }
+        XCTAssertEqual(currentPositionAfter, currentPositionBefore, "它在顺序表里的位置不变")
+
+        // W 应该在本轮剩余部分里（不会立即打断播放）
+        XCTAssertTrue(list.queue.currentOrder.contains(list.items.firstIndex(where: { $0.identity == w.identity })!))
     }
 }
 

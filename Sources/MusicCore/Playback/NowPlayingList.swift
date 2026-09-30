@@ -126,7 +126,13 @@ public struct NowPlayingList {
         newItems.insert(contentsOf: toInsert, at: anchor)
 
         let placement: EditPlacement = cur != nil ? .afterCurrent : (queue.pendingResumeItemIndex != nil ? .atResume : .atStart)
-        return commitEdit(newItems, toInsert: toInsert, placement: placement, relocated: relocatedIdentities)
+        // v2：queue 的 added 要包含 toInsert 全部（新加入的 + 被挪过来的）；playNext
+        // 的 toInsert 在上面的去重循环里已经排除了正在播放的那首，不需要再排除。
+        return commitEdit(
+            newItems, addedTracks: toInsert,
+            insertedCount: toInsert.count - relocatedIdentities.count, relocatedCount: relocatedIdentities.count,
+            placement: placement
+        )
     }
 
     /// 加到末尾（FR-005）。正在播放的那首即使在输入里也不去掉：它被挪到末尾，播放不中断。
@@ -153,7 +159,15 @@ public struct NowPlayingList {
         var newItems = remaining
         newItems.append(contentsOf: toInsert)
 
-        return commitEdit(newItems, toInsert: toInsert, placement: .randomInRemainder, relocated: relocatedIdentities)
+        // v2：queue 的 added 要排除当前曲目——它即使在输入里也不去掉（①），但它已经
+        // 在顺序表里占着位置，不能再当作「要插入的」处理，否则随机模式下顺序表会出现
+        // 重复下标。EditResult 的计数仍然按 toInsert 全量算，和当前曲目是否在其中无关。
+        let addedTracks = toInsert.filter { $0.identity != playing }
+        return commitEdit(
+            newItems, addedTracks: addedTracks,
+            insertedCount: toInsert.count - relocatedIdentities.count, relocatedCount: relocatedIdentities.count,
+            placement: .randomInRemainder
+        )
     }
 
     /// 从播放列表移除（FR-006）。下标可以重复、可以越界，越界的忽略。
@@ -216,31 +230,34 @@ public struct NowPlayingList {
         identityIndex = index
     }
 
-    /// `playNext`/`append` 共用的收尾：算出 `map`/`added`、提交新 `items`、
-    /// 推进队列、转入独立状态，返回编辑结果。
+    /// `playNext`/`append` 共用的收尾：算出 `map`，提交新 `items`，推进队列，
+    /// 转入独立状态，返回编辑结果。复用 `setItems` 刚建好的 `identityIndex` 查
+    /// `addedTracks` 对应的新下标，不再单独为 `newItems` 重建一份索引或整体扫描
+    /// 一遍判断谁是新的——1 万首规模下这对性能类单测有意义。
     ///
-    /// `toInsert` 是这次调用要插入的曲目（通常只有几首），`relocatedIdentities` 是其中
-    /// 已经在旧列表里、被挪了位置的那些——两者一减就是真正新增的（`added`），不需要
-    /// 像早期实现那样扫一遍 `newItems` 判断每一首是不是「旧列表里没有」；`map` 仍然要
-    /// 覆盖全部旧曲目，这一步省不掉。复用 `setItems` 刚建好的 `identityIndex` 取代新
-    /// 下标，不再单独为 `newItems` 重建一份索引——1 万首规模下这两点对性能类单测有意义。
+    /// - Parameters:
+    ///   - addedTracks: 要传给 `queue.applyEdit` 的 `added`（v2 语义：本次放到 placement
+    ///     位置的全部曲目，新加入的 + 被挪过来的；调用方已经按各自的规则排除了不该算
+    ///     进去的曲目，例如 `append` 排除当前曲目）。
+    ///   - insertedCount / relocatedCount: `EditResult` 用，和 `addedTracks` 是否排除
+    ///     当前曲目无关，按输入去重后的全量计算。
     private mutating func commitEdit(
-        _ newItems: [Track], toInsert: [Track], placement: EditPlacement, relocated relocatedIdentities: Set<TrackIdentity>
+        _ newItems: [Track], addedTracks: [Track], insertedCount: Int, relocatedCount: Int, placement: EditPlacement
     ) -> EditResult {
         let oldItems = items
 
         setItems(newItems)
 
         let map = oldItems.map { identityIndex[$0.identity] }
-        let added = toInsert.compactMap { track in
-            relocatedIdentities.contains(track.identity) ? nil : identityIndex[track.identity]
-        }
-        let relocatedNewIndices = Set(relocatedIdentities.compactMap { identityIndex[$0] })
+        let added = addedTracks.compactMap { identityIndex[$0.identity] }
 
-        queue.applyEdit(map: map, newCount: newItems.count, added: added, placement: placement, relocated: relocatedNewIndices)
+        // playNext/append 的「被挪过来」已经通过 added + placement 处理（会被挪到
+        // placement 指定的位置），不再走 relocated 那条「随机插回剩余部分」的规则——
+        // 那条规则现在只服务于 move()。
+        queue.applyEdit(map: map, newCount: newItems.count, added: added, placement: placement, relocated: [])
         markEdited()
 
-        return EditResult(inserted: added.count, relocated: relocatedIdentities.count, changed: true)
+        return EditResult(inserted: insertedCount, relocated: relocatedCount, changed: true)
     }
 
     private mutating func markEdited() {
