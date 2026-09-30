@@ -255,7 +255,11 @@ public final class PlayerViewModel: ObservableObject {
                 track.duration = entry.duration
                 return track
             }
-            let current = snapshot.currentPath.flatMap { path in items.firstIndex(where: { $0.url.path == path }) }
+            // F-18：判断同一首歌一律用 identity（T-002 的约定），不直接比较路径字符串。
+            let current = snapshot.currentPath.flatMap { path -> Int? in
+                let target = TrackIdentity(path: path)
+                return items.firstIndex { $0.identity == target }
+            }
             nowPlaying.restoreIndependent(items, current: current, source: snapshot.source)
 
             // 恢复「当前曲目」但不加载引擎：不自动播放、不恢复进度（方案 §4.2，Mac 差异）。
@@ -284,12 +288,14 @@ public final class PlayerViewModel: ObservableObject {
     private func saveNowPlayingInBackground() {
         let snapshot = nowPlaying.snapshot(currentTrack: playingTrack)
         let store = nowPlayingStore
-        Task.detached(priority: .utility) { [weak self] in
-            let reason = store.save(snapshot)
+        // F-17：外层用继承主线程的 Task（不是 Task.detached），只把写盘这一步
+        // 放到后台；self 全程只在主线程闭包里用到，不会被跨线程的 @Sendable
+        // 闭包捕获（Task.detached { [weak self] in … await MainActor.run { self? … } }
+        // 会报 reference to captured var 'self' in concurrently-executing code）。
+        Task { [weak self] in
+            let reason = await Task.detached(priority: .utility) { store.save(snapshot) }.value
             guard let reason else { return }
-            await MainActor.run {
-                self?.handleNowPlayingSaveFailure(reason)
-            }
+            self?.handleNowPlayingSaveFailure(reason)
         }
     }
 
