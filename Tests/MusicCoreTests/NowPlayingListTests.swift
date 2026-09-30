@@ -259,12 +259,15 @@ final class NowPlayingListTests: XCTestCase {
         list.playFromLibrary(original, at: 0)
 
         _ = list.queue.next(auto: true) // 播完第 1 首
-        let playedBeforeEdit: Set<TrackIdentity> = {
-            guard let idx = list.queue.current else { return [] }
-            return [list.items[idx].identity]
-        }()
         _ = list.queue.next(auto: true) // 播完第 2 首，当前第 3 首
 
+        // 用顺序表直接算「已经放过的」，而不是之后再调用 next() 去数——调用次数一旦
+        // 数错就会跨进下一轮（随机重新洗牌），那一轮完全可能又抽到同一首，是不必要的
+        // 脆弱点（T-008 #14 就因为这样在 CI 上偶发失败过一次，这里改成结构性检查）。
+        let playedBeforeEdit: Set<TrackIdentity> = {
+            guard let idx = list.queue.current, let pos = list.queue.currentOrder.firstIndex(of: idx) else { return [] }
+            return Set(list.queue.currentOrder.prefix(pos).map { list.items[$0].identity })
+        }()
         let currentIdentity = list.queue.current.map { list.items[$0].identity }
         let newTrack = track("NewW")
 
@@ -272,14 +275,19 @@ final class NowPlayingListTests: XCTestCase {
         XCTAssertTrue(result.changed)
         XCTAssertEqual(result.inserted, 1)
 
-        guard let next1 = list.queue.next(auto: true) else {
-            return XCTFail("应该还有下一首")
+        guard let curItemsIdx = list.queue.current,
+              let curPos = list.queue.currentOrder.firstIndex(of: curItemsIdx) else {
+            return XCTFail("应有当前曲目")
         }
-        XCTAssertEqual(list.items[next1].identity, newTrack.identity, "应该紧接着放新插入的这首")
+        let order = list.queue.currentOrder
+        guard let newTrackItemsIdx = list.items.firstIndex(where: { $0.identity == newTrack.identity }) else {
+            return XCTFail("应能找到新插入的曲目")
+        }
+        XCTAssertEqual(order[curPos + 1], newTrackItemsIdx, "新曲目应该紧跟在当前曲目后面")
 
-        for _ in 0..<2 {
-            guard let n = list.queue.next(auto: true) else { break }
-            XCTAssertFalse(playedBeforeEdit.contains(list.items[n].identity), "已经放过的曲目不应在本轮再次出现")
+        // 本轮剩余部分（当前之后）不应再出现已经放过的曲目
+        for idx in order[(curPos + 1)...] {
+            XCTAssertFalse(playedBeforeEdit.contains(list.items[idx].identity), "已经放过的曲目不应在本轮剩余部分再出现")
         }
     }
 
@@ -330,12 +338,16 @@ final class NowPlayingListTests: XCTestCase {
         let result = list.move(from: fromIndex, to: list.items.count - 1)
         XCTAssertTrue(result.changed)
 
-        var seenCount = 0
-        for _ in 0..<(all.count - 1) {
-            guard let n = list.queue.next(auto: true) else { break }
-            if list.items[n].identity == playedIdentity { seenCount += 1 }
+        // 直接看顺序表「当前之后」的部分有没有恰好一次这首——而不是调用 next() 数
+        // 出对应次数：调用次数一旦数错就会跨进下一轮（随机重新洗牌），那一轮完全
+        // 可能又抽到同一首，是不必要的脆弱点（这条用例在 CI 上因此偶发失败过一次）。
+        guard let curItemsIdx = list.queue.current,
+              let curPos = list.queue.currentOrder.firstIndex(of: curItemsIdx) else {
+            return XCTFail("应有当前曲目")
         }
-        XCTAssertEqual(seenCount, 1, "被挪动的已播放曲目本轮应恰好再出现一次")
+        let remainder = list.queue.currentOrder[(curPos + 1)...]
+        let occurrences = remainder.filter { list.items[$0].identity == playedIdentity }.count
+        XCTAssertEqual(occurrences, 1, "被挪动的已播放曲目本轮应恰好再出现一次")
     }
 
     // MARK: - T-008 #15/#16：remove 当前曲目及其邻居
