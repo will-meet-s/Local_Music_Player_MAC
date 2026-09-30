@@ -3,6 +3,7 @@ import SwiftUI
 /// 播放列表（PL）页。支持多选、右键菜单、拖动排序、删除键、清空（T-008）。
 struct NowPlayingListView: View {
     @EnvironmentObject private var vm: PlayerViewModel
+    @EnvironmentObject private var availability: AvailabilityStore
     @State private var selection = Set<URL>()
 
     var body: some View {
@@ -14,6 +15,10 @@ struct NowPlayingListView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         // 背景与曲库列表相同：磨砂 + 隐藏 List 自带的不透明背景
         .background(VisualEffectView(material: .sidebar, opacity: vm.backgroundOpacity))
+        // T-007 §2.3：打开 PL 页时这一页的全部曲目用 high 优先级检查，
+        // 离开时把还没查完的降级为 low（不丢弃、不打断正在检查的那个）。
+        .task { vm.checkAvailabilityHigh(vm.nowPlaying.items) }
+        .onDisappear { vm.demoteAvailabilityChecks() }
     }
 
     private var header: some View {
@@ -37,8 +42,11 @@ struct NowPlayingListView: View {
             ScrollViewReader { proxy in
                 List(selection: $selection) {
                     ForEach(Array(vm.nowPlaying.items.enumerated()), id: \.element.id) { index, track in
-                        TrackRow(track: track, isCurrent: index == vm.nowPlayingIndex, isPlaying: vm.isPlaying)
-                            .tag(track.id)
+                        TrackRow(
+                            track: track, isCurrent: index == vm.nowPlayingIndex, isPlaying: vm.isPlaying,
+                            isAvailable: availability.isAvailable(track.identity)
+                        )
+                        .tag(track.id)
                     }
                     .onMove(perform: handleMove)
                 }

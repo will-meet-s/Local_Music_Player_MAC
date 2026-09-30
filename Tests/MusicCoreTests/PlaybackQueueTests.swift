@@ -351,4 +351,54 @@ final class PlaybackQueueTests: XCTestCase {
         q.park(at: 99)
         XCTAssertEqual(q.pendingResumeItemIndex, 3, "越界的停靠点等同于「接在末尾」，即 count")
     }
+
+    // MARK: - peekNextWhere（T-007 #7：跳过不满足条件的候选项，无副作用）
+
+    func testPeekNextWhereSkipsUnavailableMiddleTrack() {
+        var q = PlaybackQueue(count: 3, mode: .sequential)
+        q.select(0)
+        // 下标 1 不满足条件（模拟「不可用」），应该跳过它找到 2。
+        let result = q.peekNextWhere({ $0 != 1 }, auto: true)
+        XCTAssertEqual(result, 2)
+    }
+
+    func testPeekNextWhereHasNoSideEffects() {
+        var q = PlaybackQueue(count: 3, mode: .sequential)
+        q.select(0)
+        _ = q.peekNextWhere({ $0 != 1 }, auto: true)
+        XCTAssertEqual(q.current, 0, "peekNextWhere 不应该改变 current")
+        XCTAssertEqual(q.next(auto: true), 1, "顺序表本身也不应该被打乱")
+    }
+
+    func testPeekNextWhereReturnsNilWhenNoneSatisfy() {
+        var q = PlaybackQueue(count: 3, mode: .sequential)
+        q.select(0)
+        XCTAssertNil(q.peekNextWhere({ _ in false }, auto: true))
+    }
+
+    func testPeekNextWhereWrapsInRepeatAllMode() {
+        var q = PlaybackQueue(count: 3, mode: .repeatAll)
+        q.select(2)
+        // 顺序播放到底，允许绕回表头去找满足条件的下标。
+        let result = q.peekNextWhere({ $0 == 0 }, auto: true)
+        XCTAssertEqual(result, 0)
+    }
+
+    func testPeekNextWhereDoesNotWrapInSequentialMode() {
+        var q = PlaybackQueue(count: 3, mode: .sequential)
+        q.select(2)
+        XCTAssertNil(q.peekNextWhere({ _ in true }, auto: true), "顺序播放到表尾不应该绕回表头")
+    }
+
+    func testPeekNextWhereStaysOnCurrentForAutoRepeatOneWhenSatisfied() {
+        var q = PlaybackQueue(count: 3, mode: .repeatOne)
+        q.select(1)
+        XCTAssertEqual(q.peekNextWhere({ _ in true }, auto: true), 1, "单曲循环、自然播完时应该重播当前曲")
+    }
+
+    func testPeekNextWhereReturnsNilForAutoRepeatOneWhenCurrentUnsatisfied() {
+        var q = PlaybackQueue(count: 3, mode: .repeatOne)
+        q.select(1)
+        XCTAssertNil(q.peekNextWhere({ $0 != 1 }, auto: true), "单曲循环下 auto 只看当前曲目本身，不该跳去别的")
+    }
 }

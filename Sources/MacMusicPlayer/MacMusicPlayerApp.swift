@@ -15,6 +15,7 @@ struct MacMusicPlayerApp: App {
             ContentView()
                 .environmentObject(viewModel)
                 .environmentObject(songlists)
+                .environmentObject(viewModel.availability)
                 .frame(minWidth: 880, minHeight: 560)
         }
         .windowResizability(.contentMinSize)

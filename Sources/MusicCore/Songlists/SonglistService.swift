@@ -102,6 +102,20 @@ public final class SonglistService: ObservableObject {
         songlistsByID[id]?.entries
     }
 
+    /// 全部歌单的全部曲目，按 identity 去重（T-007 程序启动时的低优先级可用性检查）。
+    public func allTracksAcrossSonglists() -> [Track] {
+        var seen = Set<TrackIdentity>()
+        var result: [Track] = []
+        for songlist in songlistsByID.values {
+            for entry in songlist.entries {
+                let track = resolve(entry)
+                guard seen.insert(track.identity).inserted else { continue }
+                result.append(track)
+            }
+        }
+        return result
+    }
+
     /// 按 `TrackIdentity(path:)` 在曲库索引里找：找到就用曲库里的那个 `Track`（保证和曲库
     /// 列表同一文件的信息完全一致，TC-036）；找不到（别的文件夹的歌）就用 entry 里缓存的
     /// 标题、歌手、专辑、时长构造一个。

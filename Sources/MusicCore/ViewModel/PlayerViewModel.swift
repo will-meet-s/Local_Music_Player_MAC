@@ -163,9 +163,15 @@ public final class PlayerViewModel: ObservableObject {
     /// 提示性文字（T-008），和 `errorMessage` 分开；设置后 3 秒自动置 nil。
     @Published public private(set) var notice: String?
 
+    // MARK: - 可用性（T-007）
+
+    /// 按 identity 集中存放的可用性；曲库列表、PL 页、歌单详情页都读它。
+    public let availability = AvailabilityStore()
+
     // MARK: - 内部
 
     private let engine = PlayerEngine()
+    private let availabilityChecker: AvailabilityChecker
     private var metadataTask: Task<Void, Never>?
     private var noticeTask: Task<Void, Never>?
     /// 连续播放失败次数。用来避免整目录都是坏文件时无限自动跳曲。
@@ -189,6 +195,7 @@ public final class PlayerViewModel: ObservableObject {
         self.replayGainEnabled = Preferences.replayGainEnabled
         self.sampleRateMatchingEnabled = Preferences.sampleRateMatchingEnabled
         self.nowPlaying = NowPlayingList(mode: mode)
+        self.availabilityChecker = AvailabilityChecker(store: availability)
 
         engine.volume = vol
         engine.matchesOutputSampleRate = Preferences.sampleRateMatchingEnabled
@@ -276,6 +283,11 @@ public final class PlayerViewModel: ObservableObject {
             if self.library.isEmpty && reportEmpty {
                 self.errorMessage = "该文件夹下没有找到受支持的音频文件"
             }
+
+            // T-007（刷新曲库之后）：扫描到的曲目一律判为可用——扫描本身就证明文件存在；
+            // PL 的 items 额外用 high 优先级复查一遍（例如卷刚恢复，之前判的不可用要更新）。
+            self.availability.apply(available: self.library.map(\.identity), unavailable: [])
+            await self.availabilityChecker.enqueue(self.nowPlaying.items, priority: .high)
 
             self.loadMetadataInBackground()
         }
@@ -401,20 +413,38 @@ public final class PlayerViewModel: ObservableObject {
 
     // MARK: - 播放控制
 
-    /// 在曲库点播。
+    /// 在曲库点播。不可用时（T-007）提示「找不到该文件」，当前播放和播放列表都不变。
     public func play(at index: Int) {
         guard tracks.indices.contains(index) else { return }
-        nowPlaying.playFromLibrary(tracks, at: index)
-        bumpRevision()
-        startCurrent()
+        let track = tracks[index]
+        Task {
+            guard await self.isPlayable(track) else {
+                self.errorMessage = "找不到该文件：\(track.url.path)"
+                return
+            }
+            // 等检查结果的这段时间列表可能变过，按原下标重新校验一次身份再落地。
+            guard self.tracks.indices.contains(index), self.tracks[index].identity == track.identity else { return }
+            self.nowPlaying.playFromLibrary(self.tracks, at: index)
+            self.bumpRevision()
+            self.startCurrent()
+        }
     }
 
-    /// 在播放列表页双击：只切换播放位置，状态和来源不变。
+    /// 在播放列表页双击：只切换播放位置，状态和来源不变。不可用时同 `play(at:)`。
     public func playInNowPlaying(at index: Int) {
         guard nowPlaying.items.indices.contains(index) else { return }
-        nowPlaying.selectInList(index)
-        bumpRevision()
-        startCurrent()
+        let track = nowPlaying.items[index]
+        Task {
+            guard await self.isPlayable(track) else {
+                self.errorMessage = "找不到该文件：\(track.url.path)"
+                return
+            }
+            guard self.nowPlaying.items.indices.contains(index),
+                  self.nowPlaying.items[index].identity == track.identity else { return }
+            self.nowPlaying.selectInList(index)
+            self.bumpRevision()
+            self.startCurrent()
+        }
     }
 
     // MARK: - 播放歌单（T-006）
@@ -446,15 +476,35 @@ public final class PlayerViewModel: ObservableObject {
         startCurrent()
     }
 
-    /// T-007 占位实现：总是可用。T-007 合入后替换为真实的可用性检查，调用方不改。
+    /// 点播时用：最多等 3 秒的实时检查（不看缓存的可用性结果，卷已知不可达时立即
+    /// 返回 false）。结果写回 `availability`，供列表下次重绘时显示。
     public func isPlayable(_ track: Track) async -> Bool {
-        true
+        await availabilityChecker.checkNow(track)
     }
 
-    /// T-007 占位实现：只要下标在范围内就是"第一首可用的"。T-007 合入后替换为
-    /// 真实实现（跳过已知不可用的曲目），调用方不改。
+    /// 从 `startIndex` 往后找第一首已知可用的（只看已有结果，不等待检查），
+    /// 给「播放全部」用。
     public func firstPlayable(in tracks: [Track], from startIndex: Int) async -> Int? {
-        tracks.indices.contains(startIndex) ? startIndex : nil
+        guard startIndex >= 0, startIndex < tracks.count else { return nil }
+        for index in startIndex..<tracks.count where availability.isAvailable(tracks[index].identity) {
+            return index
+        }
+        return nil
+    }
+
+    /// 打开某个歌单/播放列表页、或程序启动时调用：这批曲目用 high 优先级检查（T-007 §2.3）。
+    public func checkAvailabilityHigh(_ tracks: [Track]) {
+        Task { await availabilityChecker.enqueue(tracks, priority: .high) }
+    }
+
+    /// 程序启动时对全部歌单的曲目用的低优先级检查（T-007 §2.3）。
+    public func checkAvailabilityLow(_ tracks: [Track]) {
+        Task { await availabilityChecker.enqueue(tracks, priority: .low) }
+    }
+
+    /// 离开歌单/播放列表页时调用：把还没查完的 high 降级为 low，不丢弃、不重新派发。
+    public func demoteAvailabilityChecks() {
+        Task { await availabilityChecker.demoteHigh() }
     }
 
     // MARK: - 播放列表编辑（T-008）
@@ -567,7 +617,7 @@ public final class PlayerViewModel: ObservableObject {
             seek(to: 0)
             return
         }
-        guard nowPlaying.queue.previous() != nil else { return }
+        guard skippingUnavailable({ self.nowPlaying.queue.previous() }) != nil else { return }
         startCurrent()
         bumpRevision()
     }
@@ -587,15 +637,39 @@ public final class PlayerViewModel: ObservableObject {
     // MARK: - 内部流转
 
     /// 手动切歌。自动推进由引擎的无缝队列负责，不走这里。
+    ///
+    /// T-007：拿到的曲目已知不可用时，继续同方向走，最多 `items.count` 步；
+    /// 一直没有可用的，按顺序播放到达末尾一样停止（§4.2 的停止流程在 `onError`
+    /// 连续失败达到整轮时也会触发，两处共用同一套「没有可用曲目」的收尾）。
     private func advance(auto: Bool) {
-        guard nowPlaying.queue.next(auto: auto) != nil else {
-            // 顺序播放到达列表末尾
+        guard skippingUnavailable({ self.nowPlaying.queue.next(auto: auto) }) != nil else {
             stop()
             collapseCurrentTrackIfOrphaned()
             return
         }
         startCurrent()
         bumpRevision()
+    }
+
+    /// `next`/`previous` 拿到的下标已知不可用时，反复调用同一个 `step()` 继续往
+    /// 同方向走，最多 `items.count` 次，避免全部不可用时死循环；不修改 `items`
+    /// （T-007 ①：不自动删除不可用曲目）。`step()` 连续两次给出同一个下标
+    /// （单曲循环卡在同一首不可用的歌上、或顺序播放在边界上已经走不动）时提前
+    /// 停手，视为「这个方向上找不到可用的」。
+    private func skippingUnavailable(_ step: () -> Int?) -> Int? {
+        var index = step()
+        var steps = 0
+        var seen = Set<Int>()
+        while let i = index {
+            guard nowPlaying.items.indices.contains(i) else { return nil }
+            if availability.isAvailable(nowPlaying.items[i].identity) {
+                return i
+            }
+            guard steps < nowPlaying.items.count, seen.insert(i).inserted else { return nil }
+            steps += 1
+            index = step()
+        }
+        return nil
     }
 
     /// 顺序播放到头要停止时，如果独立状态下正在播的这首已经不在 `items` 里
@@ -712,10 +786,15 @@ public final class PlayerViewModel: ObservableObject {
         }
 
         // 引擎会提前把下一首塞进队列缓冲以实现无缝切歌。
-        // peekNext 不能有副作用 —— 此刻当前曲还在播，队列位置不能动。
+        // peekNextWhere 不能有副作用 —— 此刻当前曲还在播，队列位置不能动。
+        // T-007：跳过已知不可用的曲目，不然会预加载一首打不开的文件。
         engine.provideNext = { [weak self] in
             guard let self,
-                  let index = self.nowPlaying.queue.peekNext(auto: true),
+                  let index = self.nowPlaying.queue.peekNextWhere(
+                      { self.nowPlaying.items.indices.contains($0)
+                          && self.availability.isAvailable(self.nowPlaying.items[$0].identity) },
+                      auto: true
+                  ),
                   self.nowPlaying.items.indices.contains(index) else { return nil }
             self.preloadedVersion = self.listVersion
             return self.playable(for: self.nowPlaying.items[index])
@@ -742,6 +821,12 @@ public final class PlayerViewModel: ObservableObject {
             guard let self else { return }
             self.errorMessage = message
             self.isPlaying = false
+
+            // T-007：在基线逻辑之前，后台复查一下这首是不是文件真的不见了，
+            // 不存在就标为不可用，供下次切歌/预加载跳过；不阻塞后面的自动跳过。
+            if let failedTrack = self.playingTrack {
+                Task { await self.availabilityChecker.checkAfterPlaybackError(failedTrack) }
+            }
 
             // 坏文件不该卡住播放，自动跳过；但整个列表都放不出来时必须停下，
             // 否则会在队列里无限打转。

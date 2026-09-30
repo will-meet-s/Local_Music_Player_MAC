@@ -137,6 +137,53 @@ public struct PlaybackQueue {
         }
     }
 
+    /// 与 `peekNext` 一样没有副作用，但按 `ok` 跳过不满足条件的候选项（T-007：
+    /// 跳过已知不可用的曲目）。从当前位置模拟推进，最多 `count` 步，避免全部
+    /// 都不满足时死循环；返回第一个满足 `ok` 的下标，找不到返回 nil。
+    ///
+    /// 随机模式走到一轮末尾时返回 nil，与 `peekNext` 的已知限制相同——下一轮的
+    /// 随机顺序要到真正翻页时才洗出来，预看阶段无从得知。
+    public func peekNextWhere(_ ok: (Int) -> Bool, auto: Bool) -> Int? {
+        guard count > 0 else { return nil }
+        let wraps = (mode == .repeatAll || mode == .repeatOne)
+
+        guard let c = current else {
+            if let r = resumeAt {
+                return firstMatching(ok, startPosition: r, wrap: wraps)
+            }
+            guard let target = parkedTarget else { return nil }
+            let startPos = order.firstIndex(of: target) ?? 0
+            return firstMatching(ok, startPosition: startPos, wrap: wraps)
+        }
+
+        if auto && mode == .repeatOne {
+            return ok(c) ? c : nil
+        }
+
+        return firstMatching(ok, startPosition: position + 1, wrap: wraps)
+    }
+
+    /// 从顺序表的某个位置开始（含），按「是否允许跨过表尾回到表头」找第一个满足
+    /// `ok` 的下标；最多检查 `count` 次，不满足就往下一位置试，不修改任何状态。
+    private func firstMatching(_ ok: (Int) -> Bool, startPosition: Int, wrap: Bool) -> Int? {
+        guard !order.isEmpty else { return nil }
+        var pos = startPosition
+        var steps = 0
+        while steps < count {
+            if pos >= order.count {
+                guard wrap else { return nil }
+                pos = 0
+            }
+            if pos < order.count {
+                let idx = order[pos]
+                if ok(idx) { return idx }
+            }
+            pos += 1
+            steps += 1
+        }
+        return nil
+    }
+
     /// 下一首。
     /// - Parameter auto: true 表示当前曲目自然播完触发（单曲循环会重播当前曲）；
     ///                   false 表示用户点了「下一首」（单曲循环也前进）。

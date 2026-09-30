@@ -9,6 +9,7 @@ struct SonglistDetailView: View {
 
     @EnvironmentObject private var songlists: SonglistService
     @EnvironmentObject private var vm: PlayerViewModel
+    @EnvironmentObject private var availability: AvailabilityStore
     @State private var selection = Set<URL>()
     /// F-7：不在曲库里的曲目，后台读到的元数据先放这里，读到一首就更新一首。
     @State private var loadedMetadata: [TrackIdentity: Track] = [:]
@@ -39,6 +40,10 @@ struct SonglistDetailView: View {
         .task(id: id) {
             await loadMissingMetadataAndRefreshCache()
         }
+        // T-007 §2.3：打开某个歌单时，这一页的全部曲目用 high 优先级检查；
+        // 离开时（切到别的歌单或返回列表）降级为 low。
+        .task(id: id) { vm.checkAvailabilityHigh(displayedTracks) }
+        .onDisappear { vm.demoteAvailabilityChecks() }
     }
 
     private var header: some View {
@@ -91,8 +96,11 @@ struct SonglistDetailView: View {
             List(selection: $selection) {
                 ForEach(entries, id: \.path) { entry in
                     let track = resolvedTrack(for: entry)
-                    TrackRow(track: track, isCurrent: track.identity == vm.playingTrack?.identity, isPlaying: vm.isPlaying)
-                        .tag(track.id)
+                    TrackRow(
+                        track: track, isCurrent: track.identity == vm.playingTrack?.identity, isPlaying: vm.isPlaying,
+                        isAvailable: availability.isAvailable(track.identity)
+                    )
+                    .tag(track.id)
                 }
             }
             .listStyle(.inset)

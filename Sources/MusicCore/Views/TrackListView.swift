@@ -3,6 +3,7 @@ import SwiftUI
 /// 左侧曲目列表：搜索框 + 排序控件 + 列表。单击选中（支持 ⌘ / Shift 多选），双击播放。
 struct TrackListView: View {
     @EnvironmentObject private var vm: PlayerViewModel
+    @EnvironmentObject private var availability: AvailabilityStore
     @State private var selection = Set<URL>()
 
     var body: some View {
@@ -24,8 +25,11 @@ struct TrackListView: View {
             ScrollViewReader { proxy in
                 List(selection: $selection) {
                     ForEach(Array(vm.tracks.enumerated()), id: \.element.id) { index, track in
-                        TrackRow(track: track, isCurrent: index == vm.currentIndex, isPlaying: vm.isPlaying)
-                            .tag(track.id)
+                        TrackRow(
+                            track: track, isCurrent: index == vm.currentIndex, isPlaying: vm.isPlaying,
+                            isAvailable: availability.isAvailable(track.identity)
+                        )
+                        .tag(track.id)
                     }
                 }
                 .listStyle(.inset)

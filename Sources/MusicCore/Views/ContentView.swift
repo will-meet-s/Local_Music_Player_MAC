@@ -43,6 +43,10 @@ public struct ContentView: View {
             vm.restoreLastSession()
             songlists.playerViewModel = vm
             await songlists.loadAll()
+            // T-007 §2.3：程序启动，歌单加载完之后——PL 的 items 用 high，
+            // 全部歌单的全部曲目按 identity 去重后用 low。
+            vm.checkAvailabilityHigh(vm.nowPlaying.items)
+            vm.checkAvailabilityLow(songlists.allTracksAcrossSonglists())
         }
         // F-12：四个「添加到歌单」入口共用这一个 sheet；菜单项自己不再各挂一个 .sheet。
         // F-13：直接用 $songlists.pendingCreate 的 Binding，不要在 get 里现造包装值——
