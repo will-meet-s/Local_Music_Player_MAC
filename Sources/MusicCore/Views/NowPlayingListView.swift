@@ -64,6 +64,8 @@ struct NowPlayingListView: View {
         let selected = SelectionOrder.byListOrder(urls, in: vm.nowPlaying.items)
         Button("下一首播放") { vm.playNext(selected) }
         Button("移到末尾") { vm.appendToNowPlaying(selected) }
+        AddToSonglistMenu(tracks: { SelectionOrder.byListOrder(urls, in: vm.nowPlaying.items) }, excluding: nil)
+        Divider()
         Button("从播放列表移除", role: .destructive) {
             removeByIdentity(Set(selected.map(\.identity)))
         }

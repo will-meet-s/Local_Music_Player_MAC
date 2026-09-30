@@ -467,6 +467,12 @@ public final class PlayerViewModel: ObservableObject {
         }
     }
 
+    /// 供 `SonglistService`（T-004）等外部模块弹提示，和内部编辑命令共用同一套
+    /// 3 秒自动消失的逻辑。
+    public func showNotice(_ text: String) {
+        setNotice(text)
+    }
+
     private func setNotice(_ text: String) {
         noticeTask?.cancel()
         notice = text

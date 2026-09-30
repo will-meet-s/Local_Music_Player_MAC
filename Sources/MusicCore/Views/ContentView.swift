@@ -16,6 +16,12 @@ public struct ContentView: View {
                 Divider()
             }
 
+            // T-004：SonglistService 的错误（saveFailed 等）和 vm.errorMessage 一样显示。
+            if let message = songlists.errorMessage {
+                ErrorBanner(message: message) { songlists.errorMessage = nil }
+                Divider()
+            }
+
             if let notice = vm.notice {
                 NoticeBanner(message: notice)
                 Divider()

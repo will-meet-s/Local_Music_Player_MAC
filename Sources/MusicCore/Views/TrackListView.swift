@@ -51,9 +51,9 @@ struct TrackListView: View {
 
     @ViewBuilder
     private func contextMenuItems(for urls: Set<URL>) -> some View {
-        let selected = SelectionOrder.byListOrder(urls, in: vm.tracks)
-        Button("下一首播放") { vm.playNext(selected) }
-        Button("添加到播放列表末尾") { vm.appendToNowPlaying(selected) }
+        Button("下一首播放") { vm.playNext(SelectionOrder.byListOrder(urls, in: vm.tracks)) }
+        Button("添加到播放列表末尾") { vm.appendToNowPlaying(SelectionOrder.byListOrder(urls, in: vm.tracks)) }
+        AddToSonglistMenu(tracks: { SelectionOrder.byListOrder(urls, in: vm.tracks) }, excluding: nil)
     }
 
     /// 新的行还没完成布局就 scrollTo 会没反应，所以放到下一个 runloop。

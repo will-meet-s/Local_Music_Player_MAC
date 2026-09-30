@@ -17,6 +17,10 @@ public actor SonglistStore {
     /// `commit` 的结果：无论成功失败都带上最新的磁盘视图。
     public struct CommitOutcome: Sendable {
         public var snapshot: Snapshot
+        /// 应用操作之前、写前同步后的 `fresh[targetID]`（T-004）。新建、或同步后才发现
+        /// 目标不存在时为 nil。用来算 `added`/`skipped` 这类"和写前的最新数据比"的计数，
+        /// 不能用界面上的旧数据算。
+        public var before: Songlist?
         public var result: Result<Songlist?, SonglistError>
     }
 
@@ -94,7 +98,7 @@ public actor SonglistStore {
         } catch {
             // 目录不存在且创建失败（例如上级目录只读）；目录已存在但被设为只读的情况
             // 在下面写临时文件时通过 errno 精确映射，见 writeAtomically。
-            return CommitOutcome(snapshot: currentSnapshot, result: .failure(.saveFailed(reason: "数据文件夹没有写入权限")))
+            return CommitOutcome(snapshot: currentSnapshot, before: nil, result: .failure(.saveFailed(reason: "数据文件夹没有写入权限")))
         }
 
         let lock = await acquireLock(timeout: 2)
@@ -104,9 +108,9 @@ public actor SonglistStore {
             fd = acquiredFD
         case .openFailed(let errnoValue):
             let reason = POSIXIOError(errnoValue: errnoValue).reason
-            return CommitOutcome(snapshot: currentSnapshot, result: .failure(.saveFailed(reason: reason)))
+            return CommitOutcome(snapshot: currentSnapshot, before: nil, result: .failure(.saveFailed(reason: reason)))
         case .timedOut:
-            return CommitOutcome(snapshot: currentSnapshot, result: .failure(.saveFailed(reason: "歌单正在被另一个窗口保存，请稍后重试")))
+            return CommitOutcome(snapshot: currentSnapshot, before: nil, result: .failure(.saveFailed(reason: "歌单正在被另一个窗口保存，请稍后重试")))
         }
         defer {
             flock(fd, LOCK_UN)
@@ -117,44 +121,51 @@ public actor SonglistStore {
 
         // 目标歌单的文件这时读取失败：不覆盖它（文件名由 UUID 决定，不依赖内容能否解析）
         if let targetID = op.targetID, failures[fileName(for: targetID)] != nil {
-            return CommitOutcome(snapshot: currentSnapshot, result: .failure(.saveFailed(reason: "歌单文件已损坏，已保留原文件")))
+            return CommitOutcome(snapshot: currentSnapshot, before: nil, result: .failure(.saveFailed(reason: "歌单文件已损坏，已保留原文件")))
         }
 
         let fresh = currentSnapshot.songlists
+        let before = op.targetID.flatMap { fresh[$0] }
         let applied: Songlist?
         do {
             applied = try op.apply(to: fresh, now: Date())
         } catch let error as SonglistError {
-            return CommitOutcome(snapshot: currentSnapshot, result: .failure(error))
+            return CommitOutcome(snapshot: currentSnapshot, before: before, result: .failure(error))
         } catch {
-            return CommitOutcome(snapshot: currentSnapshot, result: .failure(.saveFailed(reason: "写入失败")))
+            return CommitOutcome(snapshot: currentSnapshot, before: before, result: .failure(.saveFailed(reason: "写入失败")))
         }
 
         if let applied {
+            // T-004：应用后内容和写前同步后的最新数据完全一样（例如要加的歌全部已存在），
+            // 不写盘，原样返回——文件修改时间不变（单测 3、8）。
+            if applied == before {
+                return CommitOutcome(snapshot: currentSnapshot, before: before, result: .success(applied))
+            }
+
             // 新建 / 修改
             var toWrite = applied
             toWrite.revision += 1
             do {
                 try write(toWrite)
             } catch let error as POSIXIOError {
-                return CommitOutcome(snapshot: currentSnapshot, result: .failure(.saveFailed(reason: error.reason)))
+                return CommitOutcome(snapshot: currentSnapshot, before: before, result: .failure(.saveFailed(reason: error.reason)))
             } catch {
-                return CommitOutcome(snapshot: currentSnapshot, result: .failure(.saveFailed(reason: "写入失败")))
+                return CommitOutcome(snapshot: currentSnapshot, before: before, result: .failure(.saveFailed(reason: "写入失败")))
             }
-            return CommitOutcome(snapshot: currentSnapshot, result: .success(toWrite))
+            return CommitOutcome(snapshot: currentSnapshot, before: before, result: .success(toWrite))
         } else {
             // 删除
             guard let id = op.targetID else {
-                return CommitOutcome(snapshot: currentSnapshot, result: .failure(.saveFailed(reason: "写入失败")))
+                return CommitOutcome(snapshot: currentSnapshot, before: before, result: .failure(.saveFailed(reason: "写入失败")))
             }
             do {
                 try remove(fileName: fileName(for: id))
             } catch let error as POSIXIOError {
-                return CommitOutcome(snapshot: currentSnapshot, result: .failure(.saveFailed(reason: error.reason)))
+                return CommitOutcome(snapshot: currentSnapshot, before: before, result: .failure(.saveFailed(reason: error.reason)))
             } catch {
-                return CommitOutcome(snapshot: currentSnapshot, result: .failure(.saveFailed(reason: "写入失败")))
+                return CommitOutcome(snapshot: currentSnapshot, before: before, result: .failure(.saveFailed(reason: "写入失败")))
             }
-            return CommitOutcome(snapshot: currentSnapshot, result: .success(nil))
+            return CommitOutcome(snapshot: currentSnapshot, before: before, result: .success(nil))
         }
     }
 

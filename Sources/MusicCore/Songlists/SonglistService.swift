@@ -1,5 +1,14 @@
 import Foundation
 
+/// 一次批量加歌的结果（T-004）。
+public struct AddResult: Equatable, Sendable {
+    /// 新加入的首数。
+    public var added: Int
+    /// 因为已经在歌单里而跳过的首数（新建歌单时恒为 0）。
+    public var skipped: Int
+    public var songlistName: String
+}
+
 /// 歌单的内存目录、发布给界面、调度写盘操作、生成提示文字。
 ///
 /// 在 `MacMusicPlayerApp` 里用 `@StateObject` 创建一个，通过 `.environmentObject`
@@ -109,8 +118,75 @@ public final class SonglistService: ObservableObject {
         }
     }
 
-    /// 通用入口，上面三个都调用它。返回之前，内存目录和界面都没有变化；成功之后才提交。
+    /// 往已有歌单里加曲目（FR-015）。`tracks` 顺序由调用方用 `SelectionOrder` 排好。
+    public func add(_ tracks: [Track], to id: UUID) async -> Result<AddResult, SonglistError> {
+        let knownName = songlistsByID[id]?.name ?? ""
+        let op = AddTracksOperation(id: id, tracks: tracks, knownName: knownName)
+        let outcome = await commitAndApply(op)
+        switch outcome.result {
+        case .success(let songlist):
+            guard let songlist else {
+                return .failure(.saveFailed(reason: "写入失败"))
+            }
+            // added/skipped 都要按写前同步后的最新数据算，不能用界面上的旧数据。
+            let beforeCount = outcome.before?.entries.count ?? 0
+            let added = songlist.entries.count - beforeCount
+            let dedupedInputCount = Self.dedupedCount(tracks)
+            return .success(AddResult(added: added, skipped: dedupedInputCount - added, songlistName: songlist.name))
+        case .failure(let error):
+            return .failure(error)
+        }
+    }
+
+    /// 新建歌单并直接写入曲目（FR-015；T-011「播放列表存为歌单」等场景）。
+    public func create(name: String, with tracks: [Track]) async -> Result<AddResult, SonglistError> {
+        let op = CreateWithTracksOperation(name: name, tracks: tracks)
+        let outcome = await commitAndApply(op)
+        switch outcome.result {
+        case .success(let songlist):
+            guard let songlist else {
+                return .failure(.saveFailed(reason: "写入失败"))
+            }
+            return .success(AddResult(added: songlist.entries.count, skipped: 0, songlistName: songlist.name))
+        case .failure(let error):
+            return .failure(error)
+        }
+    }
+
+    /// 从歌单里移除曲目（FR-016）。返回实际移除的首数。
+    public func remove(_ identities: [TrackIdentity], from id: UUID) async -> Result<Int, SonglistError> {
+        let knownName = songlistsByID[id]?.name ?? ""
+        let op = RemoveTracksOperation(id: id, identities: identities, knownName: knownName)
+        let outcome = await commitAndApply(op)
+        switch outcome.result {
+        case .success(let songlist):
+            guard let songlist else {
+                return .failure(.saveFailed(reason: "写入失败"))
+            }
+            let beforeCount = outcome.before?.entries.count ?? songlist.entries.count
+            return .success(beforeCount - songlist.entries.count)
+        case .failure(let error):
+            return .failure(error)
+        }
+    }
+
+    /// 通用入口，新建 / 重命名 / 删除都调用它。
+    /// 返回之前，内存目录和界面都没有变化；成功之后才提交。
     public func execute(_ op: SonglistOperation) async -> Result<Songlist?, SonglistError> {
+        await commitAndApply(op).result
+    }
+
+    /// F-7 专用：只在成功时更新内存 / 界面；失败时**不设置 `errorMessage`**（静默忽略，
+    /// 只是缓存没更新，不影响已经显示的内容）。不能直接用 `execute`——那个失败时会弹
+    /// `ErrorBanner`，而 F-7 的刷新是后台行为，用户没有对应的操作可以关联这条错误。
+    public func refreshCacheSilently(_ op: RefreshCacheOperation) async {
+        let outcome = await store.commit(op)
+        if case .success = outcome.result {
+            apply(outcome.snapshot)
+        }
+    }
+
+    private func commitAndApply(_ op: SonglistOperation) async -> SonglistStore.CommitOutcome {
         let outcome = await store.commit(op)
         switch outcome.result {
         case .success:
@@ -121,7 +197,12 @@ public final class SonglistService: ObservableObject {
             loadFailures = outcome.snapshot.failures
             errorMessage = error.message
         }
-        return outcome.result
+        return outcome
+    }
+
+    private static func dedupedCount(_ tracks: [Track]) -> Int {
+        var seen = Set<TrackIdentity>()
+        return tracks.filter { seen.insert($0.identity).inserted }.count
     }
 
     private func apply(_ snapshot: SonglistStore.Snapshot) {
