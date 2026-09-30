@@ -3,7 +3,6 @@ name: macOS CI
 on:
   push:
     branches: ['feature/**', 'ci/baseline']
-    tags: ['mac-test-*', 'mac-baseline-*']
   pull_request:
     branches: [main]
   workflow_dispatch:
@@ -52,7 +51,7 @@ jobs:
         run: |
           ref="${GITHUB_HEAD_REF:-$GITHUB_REF_NAME}"
           echo "artifact=MacMusicPlayer-${ref//\//-}-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
-          if [[ "$ref" == "ci/baseline" || "$GITHUB_REF_TYPE" == "tag" ]]; then echo "days=90"; else echo "days=14"; fi >> "$GITHUB_OUTPUT"
+          if [[ "$ref" == "ci/baseline" ]]; then echo "days=90"; else echo "days=14"; fi >> "$GITHUB_OUTPUT"
 
       - name: 上传安装包
         uses: actions/upload-artifact@v4
@@ -61,26 +60,3 @@ jobs:
           path: build/MacMusicPlayer-${{ env.VERSION }}.dmg
           if-no-files-found: error
           retention-days: ${{ steps.name.outputs.days }}
-
-  # v3：只在推送测试包标签时运行，把上面 build job 产出的 .dmg 发布成公开 Release
-  release:
-    needs: build
-    if: github.ref_type == 'tag'
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/checkout@v5
-      - uses: actions/download-artifact@v4
-        with:
-          path: dist
-          merge-multiple: true
-      - name: 发布 Release
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          tag="$GITHUB_REF_NAME"
-          notes="docs/test-packages/${tag}.md"
-          [[ -f "$notes" ]] || { echo "::error title=缺少本包清单::没有 $notes，先提交清单再打标签"; exit 1; }
-          gh release create "$tag" dist/*.dmg --prerelease --title "$tag" --notes-file "$notes"
