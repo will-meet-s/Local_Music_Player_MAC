@@ -179,20 +179,26 @@ public actor AvailabilityChecker {
         return result
     }
 
-    /// 在专用串行队列上执行可能卡住的探测，外面用 `withCheckedContinuation` 和一个
-    /// 定时器赛跑，谁先到谁 resume；`stat` 卡住时没办法取消，卡住的那次调用留在
-    /// 后台自己结束，不重复派发（由调用方的 `volumeProbing`/去重队列保证）。
+    /// 在后台执行可能卡住的探测，外面用 `withCheckedContinuation` 和一个定时器
+    /// 赛跑，谁先到谁 resume；`stat` 卡住时没办法取消，卡住的那次调用留在后台
+    /// 自己结束，不重复派发（由调用方的 `volumeProbing`/去重队列保证）。
     ///
     /// **不能**用 `withTaskGroup` 实现这个赛跑：`withTaskGroup` 在闭包返回前会
     /// 隐式等待全部子任务完成，即使已经 `cancelAll()`——`Thread.sleep` 卡住的
     /// 探测不响应取消，会把整个函数拖到卡住的那次真正结束才返回，等于没有超时。
+    ///
+    /// **不能**派发到同一个自建的串行队列上：一次卡住的探测会占住队列，后面所有
+    /// 探测（哪怕是完全不相关的卷、完全不卡的文件）都要排在它后面，逐个陪着空等，
+    /// 这就是「按卷熔断」原本要避免的「一个卷拖累其它一切」。改用系统的全局并发
+    /// 队列，不同探测互不阻塞；「同一个卷同时只探测一次」已经由 `volumeProbing`
+    /// 这个逻辑层面的去重保证，不需要再靠队列本身的串行来保证。
     private static func probeWithTimeout(
         seconds: TimeInterval, probe: FileProbe, _ work: @escaping @Sendable (FileProbe) -> Bool
     ) async -> Bool? {
         await withCheckedContinuation { (continuation: CheckedContinuation<Bool?, Never>) in
             let guard_ = ResumeOnce()
 
-            probeQueue.async {
+            DispatchQueue.global(qos: .utility).async {
                 let result = work(probe)
                 if guard_.tryResume() {
                     continuation.resume(returning: result)
@@ -206,8 +212,6 @@ public actor AvailabilityChecker {
             }
         }
     }
-
-    private static let probeQueue = DispatchQueue(label: "com.macmusicplayer.availability-probe")
 }
 
 /// 保证一个 continuation 只被 resume 一次：探测和超时定时器谁先到谁赢，

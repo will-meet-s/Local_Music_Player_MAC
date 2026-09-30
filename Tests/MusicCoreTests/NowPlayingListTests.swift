@@ -335,7 +335,13 @@ final class NowPlayingListTests: XCTestCase {
         guard let fromIndex = list.items.firstIndex(where: { $0.identity == playedIdentity }) else {
             return XCTFail("应能找到已播放的那首")
         }
-        let result = list.move(from: fromIndex, to: list.items.count - 1)
+        // items 数组本身不随机洗牌（洗的是 queue.order 这张播放顺序表），已播放的
+        // 那首有 1/4 的概率本来就在 items 的最后一位——这时候 move(from:to:) 的
+        // from == to，属于合法的无操作（这条用例在 CI 上因此偶发失败过一次，
+        // 断言的是 move() 本身的契约，不是这条用例想测的「挪动后还在」这件事）。
+        // 挑一个保证跟 fromIndex 不同的目标位置，消除这个巧合。
+        let toIndex = fromIndex == list.items.count - 1 ? 0 : list.items.count - 1
+        let result = list.move(from: fromIndex, to: toIndex)
         XCTAssertTrue(result.changed)
 
         // 直接看顺序表「当前之后」的部分有没有恰好一次这首——而不是调用 next() 数
