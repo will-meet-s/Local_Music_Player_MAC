@@ -106,6 +106,9 @@ struct SonglistDetailView: View {
                     )
                     .tag(track.id)
                 }
+                // T-005：T-012（歌单内搜索）还没合入，isFiltering 恒为 false，
+                // 不需要在这里禁用拖动；T-012 落地后按方案 §2 加上判断。
+                .onMove(perform: handleMove)
             }
             .listStyle(.inset)
             .scrollContentBackground(.hidden)
@@ -131,9 +134,39 @@ struct SonglistDetailView: View {
         Button("下一首播放") { vm.playNext(selectedTracks) }
         Button("添加到播放列表末尾") { vm.appendToNowPlaying(selectedTracks) }
         AddToSonglistMenu(tracks: { selectedTracks }, excluding: id)
+        // T-005：恰好选中 1 首、且不在搜索中（T-012 未合入前恒不在搜索中）时才显示。
+        if urls.count == 1, let url = urls.first, let index = entryIndex(for: url) {
+            Divider()
+            Button("上移一位") { moveEntry(at: index, to: index - 1) }
+                .disabled(index == 0)
+            Button("下移一位") { moveEntry(at: index, to: index + 1) }
+                .disabled(index == entries.count - 1)
+        }
         Divider()
         Button("从歌单移除", role: .destructive) {
             removeByIdentity(Set(selectedTracks.map(\.identity)))
+        }
+    }
+
+    /// `entries` 里 identity 与 `url`（`Track.id`）相同的下标。
+    private func entryIndex(for url: URL) -> Int? {
+        let target = TrackIdentity(url: url)
+        return entries.firstIndex { TrackIdentity(path: $0.path) == target }
+    }
+
+    /// `onMove` 的 `destination` 是移除前的插入点，换算成「移除后的新位置」
+    /// 和 T-008 §4.4 相同。`toIndex` 越界由 `MoveEntryOperation` 钳制。
+    private func handleMove(from source: IndexSet, to destination: Int) {
+        guard source.count == 1, let from = source.first, entries.indices.contains(from) else { return }
+        let to = destination > from ? destination - 1 : destination
+        moveEntry(at: from, to: to)
+    }
+
+    private func moveEntry(at index: Int, to toIndex: Int) {
+        guard entries.indices.contains(index) else { return }
+        let identity = TrackIdentity(path: entries[index].path)
+        Task {
+            _ = await songlists.move(identity, to: toIndex, in: id)
         }
     }
 

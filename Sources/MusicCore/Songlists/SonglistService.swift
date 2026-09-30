@@ -226,6 +226,23 @@ public final class SonglistService: ObservableObject {
         }
     }
 
+    /// 调整歌单内顺序（T-005，FR-017）。`toIndex` 是移除这一首之后的新列表里的位置。
+    /// 目标曲目已被另一个实例移除时按成功处理，不写盘（方案 §2 规则 1）。
+    public func move(_ identity: TrackIdentity, to toIndex: Int, in id: UUID) async -> Result<Void, SonglistError> {
+        let knownName = songlistsByID[id]?.name ?? ""
+        let op = MoveEntryOperation(id: id, identity: identity, toIndex: toIndex, knownName: knownName)
+        let outcome = await commitAndApply(op)
+        switch outcome.result {
+        case .success(let songlist):
+            guard songlist != nil else {
+                return .failure(.saveFailed(reason: "写入失败"))
+            }
+            return .success(())
+        case .failure(let error):
+            return .failure(error)
+        }
+    }
+
     /// 通用入口，新建 / 重命名 / 删除都调用它。
     /// 返回之前，内存目录和界面都没有变化；成功之后才提交。
     public func execute(_ op: SonglistOperation) async -> Result<Songlist?, SonglistError> {

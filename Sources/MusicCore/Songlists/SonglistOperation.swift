@@ -201,6 +201,43 @@ public struct RefreshCacheOperation: SonglistOperation {
     }
 }
 
+// MARK: - T-005：调整歌单内顺序
+
+/// 调整歌单内顺序（FR-017）。按 identity 定位要挪的那一首，不按原来的下标——
+/// 另一个进程改过之后，写前同步回来的原下标可能已经对应另一首了（FR-028 ②）。
+public struct MoveEntryOperation: SonglistOperation {
+    public let targetID: UUID?
+    private let identity: TrackIdentity
+    /// 移除这一首之后的新列表里的位置。
+    private let toIndex: Int
+    private let knownName: String
+
+    public init(id: UUID, identity: TrackIdentity, toIndex: Int, knownName: String) {
+        self.targetID = id
+        self.identity = identity
+        self.toIndex = toIndex
+        self.knownName = knownName
+    }
+
+    public func apply(to fresh: [UUID: Songlist], now: Date) throws -> Songlist? {
+        guard let id = targetID, var target = fresh[id] else {
+            throw SonglistError.notFound(name: knownName)
+        }
+
+        guard let from = target.entries.firstIndex(where: { TrackIdentity(path: $0.path) == identity }) else {
+            // 被另一个进程移除了：原样返回，不写盘（T-004 §2.3 同样的口径）。
+            return target
+        }
+
+        let clampedTo = min(max(toIndex, 0), target.entries.count - 1)
+        guard from != clampedTo else { return target }
+
+        let entry = target.entries.remove(at: from)
+        target.entries.insert(entry, at: clampedTo)
+        return target
+    }
+}
+
 private extension SonglistEntry {
     init(track: Track) {
         self.init(path: track.url.path, title: track.title, artist: track.artist, album: track.album, duration: track.duration)
