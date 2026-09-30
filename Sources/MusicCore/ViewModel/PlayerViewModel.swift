@@ -417,6 +417,46 @@ public final class PlayerViewModel: ObservableObject {
         startCurrent()
     }
 
+    // MARK: - 播放歌单（T-006）
+
+    /// 歌单详情页双击某一行。`displayed` 是详情页当前显示的曲目（T-004 的
+    /// `displayedTracks`，T-012 之后是搜索结果），`name` 是当前歌单名。
+    public func playSonglist(_ displayed: [Track], at index: Int, name: String) async {
+        guard displayed.indices.contains(index) else { return }
+        let track = displayed[index]
+        guard await isPlayable(track) else {
+            errorMessage = "找不到该文件：\(track.url.path)"
+            return
+        }
+        nowPlaying.playFromSonglist(displayed, at: index, name: name)
+        bumpRevision()
+        startCurrent()
+    }
+
+    /// 歌单详情页顶部「播放全部」。从第 0 首开始；第 0 首不可用就往后找第一首可用的；
+    /// 全部不可用时显示提示，播放列表不变。
+    public func playSonglistAll(_ displayed: [Track], name: String) async {
+        guard !displayed.isEmpty else { return }
+        guard let index = await firstPlayable(in: displayed, from: 0) else {
+            errorMessage = "列表中的音频都无法播放，已停止"
+            return
+        }
+        nowPlaying.playFromSonglist(displayed, at: index, name: name)
+        bumpRevision()
+        startCurrent()
+    }
+
+    /// T-007 占位实现：总是可用。T-007 合入后替换为真实的可用性检查，调用方不改。
+    public func isPlayable(_ track: Track) async -> Bool {
+        true
+    }
+
+    /// T-007 占位实现：只要下标在范围内就是"第一首可用的"。T-007 合入后替换为
+    /// 真实实现（跳过已知不可用的曲目），调用方不改。
+    public func firstPlayable(in tracks: [Track], from startIndex: Int) async -> Int? {
+        tracks.indices.contains(startIndex) ? startIndex : nil
+    }
+
     // MARK: - 播放列表编辑（T-008）
 
     /// 下一首播放（FR-004）。

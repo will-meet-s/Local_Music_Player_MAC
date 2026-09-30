@@ -1,10 +1,8 @@
 import SwiftUI
 
-/// 歌单详情页：显示歌单里的曲目，支持多选、右键菜单、删除键（T-004）。
+/// 歌单详情页：显示歌单里的曲目，支持多选、右键菜单、删除键（T-004），
+/// 双击和「播放全部」播放歌单（T-006）。
 /// 信息展示逻辑见 `SonglistService.resolve(_:)`（FR-012、FR-020）。
-///
-/// 双击播放歌单由 T-006 接入（`entries(of:)` + `resolve(_:)` 得到 `[Track]`，
-/// 传给 `NowPlayingList.playFromSonglist`）。
 struct SonglistDetailView: View {
     let id: UUID
     let onBack: () -> Void
@@ -21,6 +19,13 @@ struct SonglistDetailView: View {
 
     private var entries: [SonglistEntry] {
         songlists.entries(of: id) ?? []
+    }
+
+    /// T-006：详情页当前显示的曲目。点播时把这个数组本身传给 `playSonglist`/
+    /// `playSonglistAll`——不要重新从 `SonglistService` 取，Swift 数组是值类型，
+    /// 传过去就是一份独立快照。T-012 之后这里会换成过滤后的结果。
+    private var displayedTracks: [Track] {
+        entries.map { resolvedTrack(for: $0) }
     }
 
     var body: some View {
@@ -55,6 +60,15 @@ struct SonglistDetailView: View {
             Text("\(entries.count) 首")
                 .font(.caption)
                 .foregroundStyle(.secondary)
+
+            Button {
+                let tracks = displayedTracks
+                let songlistName = name
+                Task { await vm.playSonglistAll(tracks, name: songlistName) }
+            } label: {
+                Label("播放全部", systemImage: "play.fill")
+            }
+            .disabled(displayedTracks.isEmpty)
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 10)
@@ -77,7 +91,7 @@ struct SonglistDetailView: View {
             List(selection: $selection) {
                 ForEach(entries, id: \.path) { entry in
                     let track = resolvedTrack(for: entry)
-                    TrackRow(track: track, isCurrent: false, isPlaying: false)
+                    TrackRow(track: track, isCurrent: track.identity == vm.playingTrack?.identity, isPlaying: vm.isPlaying)
                         .tag(track.id)
                 }
             }
@@ -85,6 +99,13 @@ struct SonglistDetailView: View {
             .scrollContentBackground(.hidden)
             .contextMenu(forSelectionType: URL.self) { urls in
                 contextMenuItems(for: urls)
+            } primaryAction: { urls in
+                // 双击用 primaryAction，不要再加 onTapGesture(count: 2)，否则会和多选冲突。
+                guard urls.count == 1, let url = urls.first,
+                      let index = displayedTracks.firstIndex(where: { $0.id == url }) else { return }
+                let tracks = displayedTracks
+                let songlistName = name
+                Task { await vm.playSonglist(tracks, at: index, name: songlistName) }
             }
             .onDeleteCommand {
                 removeSelected()

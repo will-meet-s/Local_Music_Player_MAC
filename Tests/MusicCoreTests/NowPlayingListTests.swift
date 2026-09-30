@@ -660,3 +660,72 @@ final class SelectionOrderTests: XCTestCase {
         XCTAssertEqual(ordered.map(\.title), ["B05", "C08"])
     }
 }
+
+// MARK: - playFromSonglist（T-006：播放歌单与不同步）
+
+final class NowPlayingListPlayFromSonglistTests: XCTestCase {
+
+    private func track(_ name: String) -> Track {
+        Track(url: URL(fileURLWithPath: "/Music/\(name).mp3"))
+    }
+
+    // #1：设置 items/current/state/source
+    func testPlayFromSonglistSetsItemsCurrentStateAndSource() {
+        var list = NowPlayingList(mode: .sequential)
+        let snapshot = (0..<6).map { track("P\($0)") }
+
+        list.playFromSonglist(snapshot, at: 4, name: "通勤")
+
+        XCTAssertEqual(list.items.count, 6)
+        XCTAssertEqual(list.queue.current, 4)
+        XCTAssertEqual(list.state, .independent)
+        XCTAssertEqual(list.source, .songlist(name: "通勤"))
+    }
+
+    // #2：调用后修改原数组（加 1 首、删 1 首），items 是独立的值快照
+    func testPlayFromSonglistItemsAreIndependentOfCallerArrayMutation() {
+        var list = NowPlayingList(mode: .sequential)
+        var snapshot = (0..<6).map { track("P\($0)") }
+
+        list.playFromSonglist(snapshot, at: 4, name: "通勤")
+
+        snapshot.append(track("Extra"))
+        snapshot.remove(at: 0)
+
+        XCTAssertEqual(list.items.count, 6, "items 不应受原数组后续修改影响")
+        XCTAssertEqual(list.items.map(\.title), (0..<6).map { "P\($0)" })
+    }
+
+    // #3：来源名称是点播那一刻的快照，之后调用其他（不点播的）方法不应改写它
+    func testSonglistSourceNameStaysSnapshotAfterOtherCalls() {
+        var list = NowPlayingList(mode: .sequential)
+        let snapshot = (0..<6).map { track("P\($0)") }
+
+        list.playFromSonglist(snapshot, at: 4, name: "通勤")
+        list.selectInList(0)
+
+        XCTAssertEqual(list.source, .songlist(name: "通勤"), "来源名称不应被之后的操作更新")
+    }
+
+    // #4：列表循环模式下，放到最后一首后 next(auto:) 应回到第 0 首
+    func testSonglistRepeatAllWrapsToFirstAfterLastTrack() {
+        var list = NowPlayingList(mode: .repeatAll)
+        let snapshot = (0..<6).map { track("P\($0)") }
+
+        list.playFromSonglist(snapshot, at: 5, name: "通勤")
+
+        XCTAssertEqual(list.queue.next(auto: true), 0)
+    }
+
+    // #5：独立状态下调用方不会调用 syncFromLibrary（PlayerViewModel.rebuildDisplayed
+    // 的门槛逻辑）；这里验证不调用它时 items 确实原样保留，不会被曲库显示列表覆盖。
+    func testSonglistItemsUnaffectedWhenSyncFromLibraryNotCalled() {
+        var list = NowPlayingList(mode: .sequential)
+        let snapshot = (0..<6).map { track("P\($0)") }
+
+        list.playFromSonglist(snapshot, at: 4, name: "通勤")
+
+        XCTAssertEqual(list.items.count, 6)
+        XCTAssertEqual(list.items.map(\.title), (0..<6).map { "P\($0)" })
+    }
+}

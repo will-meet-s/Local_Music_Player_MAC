@@ -71,6 +71,18 @@ public struct NowPlayingList {
         queue.select(index)
     }
 
+    /// 在歌单里点播（T-006）。`snapshot` 是详情页当前显示的曲目——Swift 数组是值
+    /// 类型，传过去就是一份独立拷贝，之后歌单的任何改动都碰不到这份播放列表。
+    /// `name` 是点播那一刻的歌单名快照，之后不再更新（FR-001、FR-025）。
+    public mutating func playFromSonglist(_ snapshot: [Track], at index: Int, name: String) {
+        guard snapshot.indices.contains(index) else { return }
+        state = .independent
+        source = .songlist(name: name)
+        setItems(snapshot)
+        queue.setCount(items.count)
+        queue.select(index)
+    }
+
     /// 在 PL 页双击：只 select，状态和来源不变。
     public mutating func selectInList(_ index: Int) {
         guard index >= 0 && index < items.count else { return }
