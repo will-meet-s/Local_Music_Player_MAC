@@ -123,4 +123,20 @@ final class NowPlayingListTests: XCTestCase {
         XCTAssertEqual(list.items.count, 2, "items 应保留")
         XCTAssertNil(list.queue.current)
     }
+
+    // MARK: - F-2：identity 相同（大小写敏感卷上的重复文件）不应崩溃
+
+    func testDuplicateIdentityDoesNotCrashAndIndexReturnsFirstOccurrence() {
+        var list = NowPlayingList(mode: .sequential)
+        let caseOnlyDuplicate = [
+            Track(url: URL(fileURLWithPath: "/Music/X.mp3")),
+            Track(url: URL(fileURLWithPath: "/Music/x.mp3")),
+            track("Y")
+        ]
+
+        // 不崩溃是这条用例的第一重断言
+        list.syncFromLibrary(caseOnlyDuplicate, playing: nil, previousIndex: nil)
+
+        XCTAssertEqual(list.index(of: caseOnlyDuplicate[0].identity), 0, "应返回第一次出现的下标")
+    }
 }

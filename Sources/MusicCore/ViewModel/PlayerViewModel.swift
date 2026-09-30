@@ -346,14 +346,23 @@ public final class PlayerViewModel: ObservableObject {
     }
 
     private func rebuildLibraryIndex() {
-        libraryIndex = Dictionary(uniqueKeysWithValues: library.enumerated().map { ($1.identity, $0) })
+        // 同上：identity 相同的重复项保留第一次出现的下标，不能用 uniqueKeysWithValues。
+        libraryIndex = Dictionary(library.enumerated().map { ($1.identity, $0) }, uniquingKeysWith: { first, _ in first })
     }
 
     /// 按 `nowPlaying.state` 重新计算 `currentIndex`。
     private func recomputeCurrentIndex() {
         switch nowPlaying.state {
         case .followLibrary:
-            currentIndex = nowPlaying.queue.current
+            // queue.current 指向的曲目可能已经不是 playingTrack 了（引擎切到的歌不在
+            // items 里时，队列已经前进，但 playingTrack 还没跟上，见 handleAutoAdvance）。
+            if let index = nowPlaying.queue.current,
+               nowPlaying.items.indices.contains(index),
+               nowPlaying.items[index].identity == playingTrack?.identity {
+                currentIndex = index
+            } else {
+                currentIndex = nil
+            }
         case .independent:
             if let identity = playingTrack?.identity {
                 currentIndex = tracks.firstIndex(where: { $0.identity == identity })
@@ -489,8 +498,16 @@ public final class PlayerViewModel: ObservableObject {
         }
         // 都找不到：这首已经不在 PL 里了，继续播但列表里不高亮
 
-        let track = nowPlaying.queue.current
-            .flatMap { nowPlaying.items.indices.contains($0) ? nowPlaying.items[$0] : nil }
+        // 只在 items[current] 确实是引擎切到的这首时才使用它；
+        // 队列已经前进但这首不在 items 里（两个分支都没命中）时，不能想当然地
+        // 用 items[current]（那是队列里另一首歌），必须按 identity 去 library 里找。
+        let inList = nowPlaying.queue.current.flatMap { index -> Track? in
+            guard nowPlaying.items.indices.contains(index), nowPlaying.items[index].identity == identity else {
+                return nil
+            }
+            return nowPlaying.items[index]
+        }
+        let track = inList
             ?? library.first { $0.identity == identity }
             ?? Track(url: url)
 

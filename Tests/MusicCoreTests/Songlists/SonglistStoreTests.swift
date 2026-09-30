@@ -345,4 +345,41 @@ final class SonglistStoreTests: XCTestCase {
         XCTAssertEqual(created.name, "重建之后")
         XCTAssertTrue(FileManager.default.fileExists(atPath: root.path))
     }
+
+    // MARK: - #10（F-5）目标路径不在 songlists/ 下的删除
+
+    func testRemoveRejectsPathOutsideSonglistsDirectory() async throws {
+        let store = SonglistStore(root: root)
+        _ = await store.loadAll()
+
+        // 越级路径：写到 songlists/ 的上一级
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let outsideFile = root.appendingPathComponent("outside.json")
+        try Data("{}".utf8).write(to: outsideFile)
+
+        await XCTAssertThrowsErrorAsync(try await store.remove(fileName: "../outside.json"))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: outsideFile.path), "目录外的文件应不受影响")
+
+        // 文件名不匹配 UUID 命名规则
+        let insideBadName = songlistsDir().appendingPathComponent("abc.json")
+        try FileManager.default.createDirectory(at: songlistsDir(), withIntermediateDirectories: true)
+        try Data("{}".utf8).write(to: insideBadName)
+
+        await XCTAssertThrowsErrorAsync(try await store.remove(fileName: "abc.json"))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: insideBadName.path), "文件名不合法时不应删除")
+    }
+}
+
+/// `XCTAssertThrowsError` 没有 async 版本，手写一个方便在 actor 方法上使用。
+private func XCTAssertThrowsErrorAsync(
+    _ expression: @autoclosure () async throws -> Void,
+    file: StaticString = #filePath,
+    line: UInt = #line
+) async {
+    do {
+        try await expression()
+        XCTFail("期望抛出错误", file: file, line: line)
+    } catch {
+        // 抛出即符合预期
+    }
 }

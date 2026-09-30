@@ -249,7 +249,9 @@ public actor SonglistStore {
     }
 
     /// 只允许删除 `songlists/` 下、文件名匹配 UUID 命名规则的文件（§5 安全）。
-    private func remove(fileName: String) throws {
+    /// internal（非 private）是为了让测试用 `@testable import` 直接验证这条防护本身
+    /// （F-5：公开 API 的 `targetID` 恒为合法 UUID，无法从外部触发越界路径）。
+    func remove(fileName: String) throws {
         guard fileName.range(of: #"^[0-9a-f-]{36}\.json$"#, options: .regularExpression) != nil else {
             throw POSIXIOError(errnoValue: EINVAL)
         }

@@ -86,6 +86,8 @@ public struct NowPlayingList {
 
     private mutating func setItems(_ newItems: [Track]) {
         items = newItems
-        identityIndex = Dictionary(uniqueKeysWithValues: items.enumerated().map { ($1.identity, $0) })
+        // 大小写敏感的卷上 a.mp3 和 A.mp3 是同一个 identity（T-002 方案 §4），
+        // 保留第一次出现的下标，不能用 uniqueKeysWithValues（重复键会崩溃）。
+        identityIndex = Dictionary(items.enumerated().map { ($1.identity, $0) }, uniquingKeysWith: { first, _ in first })
     }
 }

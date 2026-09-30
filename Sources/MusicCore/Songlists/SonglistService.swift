@@ -15,7 +15,7 @@ public final class SonglistService: ObservableObject {
     private let store: SonglistStore
     /// 完整的歌单内容，供 `entries(of:)` 使用；界面只看 `summaries`。
     private var songlistsByID: [UUID: Songlist] = [:]
-    private var loadTask: Task<Void, Never>?
+    private var loadTask: Task<SonglistStore.Snapshot, Never>?
 
     /// 只为读取 `library`（显示信息，§4.4）；不做播放相关的事，也不双向持有。
     public weak var playerViewModel: PlayerViewModel?
@@ -28,7 +28,7 @@ public final class SonglistService: ObservableObject {
     public func loadAll() async {
         if isLoaded { return }
         if let loadTask {
-            await loadTask.value
+            _ = await loadTask.value
             return
         }
         let task = Task { [store] in

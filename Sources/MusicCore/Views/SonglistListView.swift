@@ -3,6 +3,7 @@ import SwiftUI
 /// 歌单列表页：新建、进入详情、重命名、删除。
 struct SonglistListView: View {
     @EnvironmentObject private var songlists: SonglistService
+    @EnvironmentObject private var vm: PlayerViewModel
     @State private var openedSonglist: UUID?
     @State private var showingCreateSheet = false
     @State private var renamingID: UUID?
@@ -30,7 +31,7 @@ struct SonglistListView: View {
             content
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(VisualEffectView(material: .sidebar, opacity: 1))
+        .background(VisualEffectView(material: .sidebar, opacity: vm.backgroundOpacity))
         .sheet(isPresented: $showingCreateSheet) {
             SonglistNameSheet(
                 title: "新建歌单",
