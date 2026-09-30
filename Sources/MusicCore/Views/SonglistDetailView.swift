@@ -44,6 +44,10 @@ struct SonglistDetailView: View {
         // 离开时（切到别的歌单或返回列表）降级为 low。
         .task(id: id) { vm.checkAvailabilityHigh(displayedTracks) }
         .onDisappear { vm.demoteAvailabilityChecks() }
+        // T-009 §6：登记「当前打开的歌单」，刷新曲库完成时 performScan 用它
+        // 决定要不要额外给这个歌单的曲目排一次 high 优先级检查。
+        .task(id: id) { songlists.openedID = id }
+        .onDisappear { songlists.openedID = nil }
     }
 
     private var header: some View {

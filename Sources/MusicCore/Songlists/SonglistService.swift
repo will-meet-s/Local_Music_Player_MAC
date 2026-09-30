@@ -58,6 +58,10 @@ public final class SonglistService: ObservableObject {
     /// `.sheet` 在菜单关闭时会被销毁、丢掉 `@State`，弹不出来；改成把待建曲目存
     /// 在这里，由 `ContentView` 挂唯一一个 `.sheet(item:)` 弹出。
     @Published public var pendingCreate: PendingCreate?
+    /// 当前打开的歌单详情页（T-009 §6）：`SonglistDetailView` 出现、消失时设置。
+    /// 刷新曲库完成时，`PlayerViewModel` 用它决定要不要给这个歌单的曲目额外排
+    /// 一次 high 优先级的可用性检查。
+    @Published public var openedID: UUID?
 
     private let store: SonglistStore
     /// 完整的歌单内容，供 `entries(of:)` 使用；界面只看 `summaries`。

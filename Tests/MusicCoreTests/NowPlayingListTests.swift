@@ -736,3 +736,115 @@ final class NowPlayingListPlayFromSonglistTests: XCTestCase {
         XCTAssertEqual(list.items.map(\.title), (0..<6).map { "P\($0)" })
     }
 }
+
+// MARK: - 曲库变化对播放列表的影响（T-009）
+//
+// PlayerViewModel 依赖引擎，这个项目里一直没有为它写过直接单测；按方案 §7 的说明，
+// 测试放在 NowPlayingList 层，模拟 ViewModel 的调用顺序（该不该调 syncFromLibrary
+// 完全由调用方按 state 判断，NowPlayingList 自己不做这层门槛）。
+
+final class NowPlayingListLibraryChangesTests: XCTestCase {
+
+    private func track(_ name: String) -> Track {
+        Track(url: URL(fileURLWithPath: "/Music/\(name).mp3"))
+    }
+
+    // #1：跟随状态下，搜索、排序、刷新（新增 1 首）——每一步后 items 都与传入的
+    // displayed 相同。
+    func testFollowLibrarySyncKeepsItemsInSyncWithEachDisplayedList() {
+        var list = NowPlayingList(mode: .sequential)
+        let initial = (0..<3).map { track("A\($0)") }
+        list.playFromLibrary(initial, at: 0)
+
+        let searched = [track("A1")]
+        list.syncFromLibrary(searched, playing: nil, previousIndex: nil)
+        XCTAssertEqual(list.items.map(\.identity), searched.map(\.identity), "搜索后应该是搜索结果")
+
+        let sorted = searched.reversed().map { $0 }
+        list.syncFromLibrary(sorted, playing: nil, previousIndex: nil)
+        XCTAssertEqual(list.items.map(\.identity), sorted.map(\.identity), "排序后应该是排序结果")
+
+        let refreshed = sorted + [track("NEW")]
+        list.syncFromLibrary(refreshed, playing: nil, previousIndex: nil)
+        XCTAssertEqual(list.items.map(\.identity), refreshed.map(\.identity), "刷新新增一首后应该同步进来")
+    }
+
+    // #2：独立状态下，ViewModel 不会调用 syncFromLibrary（搜索、排序只影响曲库
+    // 侧的 tracks，不影响 PL）——items 不变。
+    func testIndependentStateItemsUnchangedWhenSyncFromLibraryNotCalledForSearchAndSort() {
+        var list = NowPlayingList(mode: .sequential)
+        let snapshot = (0..<4).map { track("B\($0)") }
+        list.playFromSonglist(snapshot, at: 0, name: "通勤")
+
+        XCTAssertEqual(list.state, .independent)
+        // 模拟搜索、排序两步：独立状态下 ViewModel 根本不调用 syncFromLibrary，
+        // 这里就是不调用，直接断言 items 没有变化。
+        XCTAssertEqual(list.items.map(\.identity), snapshot.map(\.identity))
+    }
+
+    // #3：独立状态下刷新曲库，结果里没有 B06、多了 NEW——items 条数不变，
+    // 仍含 B06，不含 NEW（因为独立状态下刷新不调用 syncFromLibrary，
+    // 「刷新后的 displayed」根本不会被传给 NowPlayingList）。
+    func testIndependentStateSurvivesLibraryRefreshRemovingAndAddingTracks() {
+        var list = NowPlayingList(mode: .sequential)
+        let snapshot = (0..<8).map { track("B0\($0)") } // B00...B07，含 B06
+        list.playFromSonglist(snapshot, at: 0, name: "通勤")
+
+        // 独立状态下，即使曲库那边刷新出了「没有 B06、多了 NEW」的新 displayed，
+        // ViewModel 也不会拿它调用 syncFromLibrary——PL 完全不知道这次刷新发生过。
+        XCTAssertEqual(list.items.count, 8)
+        XCTAssertTrue(list.items.contains { $0.title == "B06" })
+        XCTAssertFalse(list.items.contains { $0.title == "NEW" })
+    }
+
+    // #4：跟随状态下切换文件夹——detachCurrent 之后 syncFromLibrary(新曲库,
+    // playing: nil, previousIndex: nil)：items 为新曲库，current == nil。
+    func testFollowLibrarySwitchingFolderReplacesItemsWithNoCurrentTrack() {
+        var list = NowPlayingList(mode: .sequential)
+        let oldLibrary = (0..<3).map { track("Old\($0)") }
+        list.playFromLibrary(oldLibrary, at: 1)
+
+        list.detachCurrent()
+        let newLibrary = (0..<5).map { track("New\($0)") }
+        list.syncFromLibrary(newLibrary, playing: nil, previousIndex: nil)
+
+        XCTAssertEqual(list.items.map(\.identity), newLibrary.map(\.identity))
+        XCTAssertNil(list.queue.current)
+    }
+
+    // #5：独立状态下切换文件夹——只 detachCurrent：items 不变，current == nil；
+    // 之后 next(false) 从头开始，返回 0。
+    func testIndependentStateSwitchingFolderOnlyDetachesCurrentTrack() {
+        var list = NowPlayingList(mode: .sequential)
+        let snapshot = (0..<4).map { track("C\($0)") }
+        list.playFromSonglist(snapshot, at: 2, name: "通勤")
+
+        list.detachCurrent()
+
+        XCTAssertEqual(list.items.map(\.identity), snapshot.map(\.identity), "独立状态下切换文件夹不应该改变 items")
+        XCTAssertNil(list.queue.current)
+        XCTAssertEqual(list.queue.next(auto: false), 0, "detachCurrent 之后应该从头开始")
+    }
+
+    // #6：清空之后，搜索、排序、刷新都不应该让 items 重新出现内容。
+    func testClearedListStaysEmptyThroughSearchSortAndRefresh() {
+        var list = NowPlayingList(mode: .sequential)
+        let initial = (0..<3).map { track("D\($0)") }
+        list.playFromLibrary(initial, at: 0)
+
+        list.clear()
+        XCTAssertTrue(list.items.isEmpty)
+
+        // 跟随状态下清空后仍然是 .independent（markEdited 的副作用），但即使
+        // ViewModel 因为某种原因又调用了 syncFromLibrary（例如清空后又搜索），
+        // 传入空结果时 items 也应该仍是空。
+        list.syncFromLibrary([], playing: nil, previousIndex: nil)
+        XCTAssertTrue(list.items.isEmpty, "搜索后仍为空")
+
+        list.syncFromLibrary([], playing: nil, previousIndex: nil)
+        XCTAssertTrue(list.items.isEmpty, "排序后仍为空")
+
+        list.syncFromLibrary([], playing: nil, previousIndex: nil)
+        XCTAssertTrue(list.items.isEmpty, "刷新后仍为空")
+    }
+}

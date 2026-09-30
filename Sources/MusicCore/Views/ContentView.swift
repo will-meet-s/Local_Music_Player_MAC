@@ -48,6 +48,13 @@ public struct ContentView: View {
             vm.checkAvailabilityHigh(vm.nowPlaying.items)
             vm.checkAvailabilityLow(songlists.allTracksAcrossSonglists())
         }
+        // T-009 §2：刷新曲库完成后，当前打开的歌单（如果有）额外用 high 优先级复查
+        // 一遍——它的曲目不是新曲库的一部分，不会被 performScan 的全量标可用覆盖到。
+        .onChange(of: vm.isScanning) { _, isScanning in
+            guard !isScanning, let openedID = songlists.openedID,
+                  let entries = songlists.entries(of: openedID) else { return }
+            vm.checkAvailabilityHigh(entries.map { songlists.resolve($0) })
+        }
         // F-12：四个「添加到歌单」入口共用这一个 sheet；菜单项自己不再各挂一个 .sheet。
         // F-13：直接用 $songlists.pendingCreate 的 Binding，不要在 get 里现造包装值——
         // 那样每次重绘都会是新 UUID，sheet 会被判定成换了一个，反复关闭重开。

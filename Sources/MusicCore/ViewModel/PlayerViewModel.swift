@@ -284,10 +284,15 @@ public final class PlayerViewModel: ObservableObject {
                 self.errorMessage = "该文件夹下没有找到受支持的音频文件"
             }
 
-            // T-007（刷新曲库之后）：扫描到的曲目一律判为可用——扫描本身就证明文件存在；
-            // PL 的 items 额外用 high 优先级复查一遍（例如卷刚恢复，之前判的不可用要更新）。
+            // T-007/T-009（刷新曲库之后）：扫描到的曲目一律判为可用——扫描本身就证明
+            // 文件存在；apply 必须排在 enqueue 前面，不然刚恢复的文件会先被旧结果盖住。
+            // 独立状态下 PL 的 items 不是新曲库的一部分，额外用 high 优先级复查一遍
+            // （例如卷刚恢复，之前判的不可用要更新）；跟随状态下 items 就是新曲库，
+            // 已经在上面全量标可用了，不用再查一次。
             self.availability.apply(available: self.library.map(\.identity), unavailable: [])
-            await self.availabilityChecker.enqueue(self.nowPlaying.items, priority: .high)
+            if self.nowPlaying.state == .independent {
+                await self.availabilityChecker.enqueue(self.nowPlaying.items, priority: .high)
+            }
 
             self.loadMetadataInBackground()
         }
