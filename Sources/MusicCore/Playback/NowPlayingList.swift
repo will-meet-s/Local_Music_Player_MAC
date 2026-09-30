@@ -126,7 +126,7 @@ public struct NowPlayingList {
         newItems.insert(contentsOf: toInsert, at: anchor)
 
         let placement: EditPlacement = cur != nil ? .afterCurrent : (queue.pendingResumeItemIndex != nil ? .atResume : .atStart)
-        return commitEdit(newItems, placement: placement, relocated: relocatedIdentities)
+        return commitEdit(newItems, toInsert: toInsert, placement: placement, relocated: relocatedIdentities)
     }
 
     /// 加到末尾（FR-005）。正在播放的那首即使在输入里也不去掉：它被挪到末尾，播放不中断。
@@ -153,7 +153,7 @@ public struct NowPlayingList {
         var newItems = remaining
         newItems.append(contentsOf: toInsert)
 
-        return commitEdit(newItems, placement: .randomInRemainder, relocated: relocatedIdentities)
+        return commitEdit(newItems, toInsert: toInsert, placement: .randomInRemainder, relocated: relocatedIdentities)
     }
 
     /// 从播放列表移除（FR-006）。下标可以重复、可以越界，越界的忽略。
@@ -219,19 +219,21 @@ public struct NowPlayingList {
     /// `playNext`/`append` 共用的收尾：算出 `map`/`added`、提交新 `items`、
     /// 推进队列、转入独立状态，返回编辑结果。
     ///
-    /// 复用 `setItems` 刚建好的 `identityIndex` 取代新下标，不再单独为 `newItems`
-    /// 重建一份索引——1 万首规模下，少建一份哈希表对性能类单测有意义。
+    /// `toInsert` 是这次调用要插入的曲目（通常只有几首），`relocatedIdentities` 是其中
+    /// 已经在旧列表里、被挪了位置的那些——两者一减就是真正新增的（`added`），不需要
+    /// 像早期实现那样扫一遍 `newItems` 判断每一首是不是「旧列表里没有」；`map` 仍然要
+    /// 覆盖全部旧曲目，这一步省不掉。复用 `setItems` 刚建好的 `identityIndex` 取代新
+    /// 下标，不再单独为 `newItems` 重建一份索引——1 万首规模下这两点对性能类单测有意义。
     private mutating func commitEdit(
-        _ newItems: [Track], placement: EditPlacement, relocated relocatedIdentities: Set<TrackIdentity>
+        _ newItems: [Track], toInsert: [Track], placement: EditPlacement, relocated relocatedIdentities: Set<TrackIdentity>
     ) -> EditResult {
         let oldItems = items
-        let oldIdentitySet = Set(oldItems.map(\.identity))
 
         setItems(newItems)
 
         let map = oldItems.map { identityIndex[$0.identity] }
-        let added = newItems.enumerated().compactMap { index, track in
-            oldIdentitySet.contains(track.identity) ? nil : index
+        let added = toInsert.compactMap { track in
+            relocatedIdentities.contains(track.identity) ? nil : identityIndex[track.identity]
         }
         let relocatedNewIndices = Set(relocatedIdentities.compactMap { identityIndex[$0] })
 
