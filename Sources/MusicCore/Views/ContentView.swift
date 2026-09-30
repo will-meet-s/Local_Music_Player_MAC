@@ -61,16 +61,20 @@ public struct ContentView: View {
         // F-12：四个「添加到歌单」入口共用这一个 sheet；菜单项自己不再各挂一个 .sheet。
         // F-13：直接用 $songlists.pendingCreate 的 Binding，不要在 get 里现造包装值——
         // 那样每次重绘都会是新 UUID，sheet 会被判定成换了一个，反复关闭重开。
+        // T-011：同一个 sheet 也接「播放列表存为歌单」，标题和成功提示按 origin 区分。
         .sheet(item: $songlists.pendingCreate) { pending in
             SonglistNameSheet(
-                title: "新建歌单",
+                title: pending.origin == .saveNowPlaying ? "播放列表存为歌单" : "新建歌单",
                 existing: songlists.summaries.map { ($0.id, $0.name) },
                 excluding: nil
             ) { name in
                 let result = await songlists.create(name: name, with: pending.tracks)
                 switch result {
                 case .success(let addResult):
-                    vm.showNotice(addResult.noticeText)
+                    let text = pending.origin == .saveNowPlaying
+                        ? "已将播放列表存为歌单「\(addResult.songlistName)」（\(addResult.added) 首）"
+                        : addResult.noticeText
+                    vm.showNotice(text)
                     return nil
                 case .failure(let error):
                     return error

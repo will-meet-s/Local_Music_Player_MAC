@@ -4,6 +4,7 @@ import SwiftUI
 struct NowPlayingListView: View {
     @EnvironmentObject private var vm: PlayerViewModel
     @EnvironmentObject private var availability: AvailabilityStore
+    @EnvironmentObject private var songlists: SonglistService
     @State private var selection = Set<URL>()
 
     var body: some View {
@@ -27,6 +28,14 @@ struct NowPlayingListView: View {
                 .font(.callout)
                 .foregroundStyle(.secondary)
             Spacer()
+            // T-011：点按钮时就取快照（vm.nowPlaying.items 是值类型），不要等 sheet
+            // 确定时再读——那时播放列表可能已经变了（方案 §7 易踩的坑）。
+            Button {
+                songlists.pendingCreate = PendingCreate(tracks: vm.nowPlaying.items, origin: .saveNowPlaying)
+            } label: {
+                Label("存为歌单", systemImage: "square.and.arrow.down")
+            }
+            .disabled(vm.nowPlaying.items.isEmpty)
             Button("清空") { vm.clearNowPlaying() }
                 .disabled(vm.nowPlaying.items.isEmpty)
         }
