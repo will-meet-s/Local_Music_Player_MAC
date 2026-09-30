@@ -120,7 +120,11 @@ struct SonglistListView: View {
                         .foregroundStyle(.secondary)
                 }
                 .contentShape(Rectangle())
-                .onTapGesture { openedSonglist = summary.id }
+                .onTapGesture {
+                    // T-014 §2.4（TC-190 ①）：结束点在 SonglistDetailView 的 List 第一行。
+                    PerfTrace.begin("songlist.open")
+                    openedSonglist = summary.id
+                }
                 .contextMenu {
                     Button("重命名…") { renamingID = summary.id }
                     Button("删除…", role: .destructive) { deletingID = summary.id }

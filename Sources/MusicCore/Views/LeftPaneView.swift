@@ -27,6 +27,11 @@ struct LeftPaneView: View {
             .padding(.horizontal, 10)
             .padding(.top, 8)
             .padding(.bottom, 6)
+            // T-014 §2.4（TC-190 ②）：nowplaying.open 的起点，结束点在 PL 页
+            // List 第一行的 .onAppear。
+            .onChange(of: selectedTab) { _, newValue in
+                if newValue == .nowPlaying { PerfTrace.begin("nowplaying.open") }
+            }
 
             Divider()
 

@@ -664,21 +664,28 @@ public final class PlayerViewModel: ObservableObject {
 
     /// 加到播放列表末尾（FR-005）。
     public func appendToNowPlaying(_ tracksToInsert: [Track]) {
+        PerfTrace.begin("nowplaying.add")
         let result = nowPlaying.append(tracksToInsert, playing: playingTrack?.identity)
         let notice = result.relocated > 0 ? "有 \(result.relocated) 首已在播放列表中，已调整到末尾" : nil
         finishEdit(result, notice: notice)
+        // T-014 §2.4：排到下一次 runloop 再打点，界面已经刷新完。
+        DispatchQueue.main.async { PerfTrace.end("nowplaying.add") }
     }
 
     /// 从播放列表移除（FR-006）。
     public func removeFromNowPlaying(at indices: IndexSet) {
+        PerfTrace.begin("nowplaying.remove")
         let result = nowPlaying.remove(at: indices)
         finishEdit(result, notice: nil)
+        DispatchQueue.main.async { PerfTrace.end("nowplaying.remove") }
     }
 
     /// 拖动排序（FR-007）。
     public func moveInNowPlaying(from: Int, to: Int) {
+        PerfTrace.begin("nowplaying.move")
         let result = nowPlaying.move(from: from, to: to)
         finishEdit(result, notice: nil)
+        DispatchQueue.main.async { PerfTrace.end("nowplaying.move") }
     }
 
     /// 清空播放列表（FR-008）。ViewModel 侧先停止播放、没有当前曲目，再清空列表。

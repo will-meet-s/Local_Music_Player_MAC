@@ -146,12 +146,16 @@ struct SonglistDetailView: View {
             // Track.id（url）在 displayedTracks 里不重复（§3.2 entries 按 identity
             // 不重复，resolve 出来的也不重复），可以直接当多选的 tag 用。
             List(selection: $selection) {
-                ForEach(displayedTracks, id: \.id) { track in
+                ForEach(Array(displayedTracks.enumerated()), id: \.element.id) { index, track in
                     TrackRow(
                         track: track, isCurrent: track.identity == vm.playingTrack?.identity, isPlaying: vm.isPlaying,
                         isAvailable: availability.isAvailable(track.identity)
                     )
                     .tag(track.id)
+                    .onAppear {
+                        // T-014 §2.4（TC-190 ①）：songlist.open 的结束点是「第一行」的 .onAppear。
+                        if index == 0 { PerfTrace.end("songlist.open") }
+                    }
                 }
                 // T-005 §2：搜索时禁止挪动（过滤后的「挪到第几位」对应不到完整
                 // 列表里的确定位置）。

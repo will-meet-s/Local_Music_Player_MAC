@@ -104,10 +104,15 @@ struct TrackListView: View {
     // MARK: - T-016：定位当前播放的歌曲
 
     private func locate(_ proxy: ScrollViewProxy) {
+        // T-014 §2.4（TC-276）：结束点是 scrollTo 所在的那次主队列跳转执行完，
+        // 不是这个方法返回的时候。
+        PerfTrace.begin("library.locate")
         switch vm.locateCurrent() {
         case .found(let index):
             showFilteredPrompt = false
-            scrollAndSelect(proxy, index: index, extraHop: false)
+            scrollAndSelect(proxy, index: index, extraHop: false) {
+                PerfTrace.end("library.locate")
+            }
         case .filteredOut:
             showFilteredPrompt = true
         case .notInFolder, .noTrack:
@@ -127,11 +132,14 @@ struct TrackListView: View {
         }
     }
 
-    private func scrollAndSelect(_ proxy: ScrollViewProxy, index: Int, extraHop: Bool) {
+    private func scrollAndSelect(_ proxy: ScrollViewProxy, index: Int, extraHop: Bool, onScrolled: (() -> Void)? = nil) {
         guard vm.tracks.indices.contains(index) else { return }
         let id = vm.tracks[index].id
         selection = [id]
-        let scrollToCenter = { proxy.scrollTo(id, anchor: .center) }
+        let scrollToCenter = {
+            proxy.scrollTo(id, anchor: .center)
+            onScrolled?()
+        }
         if extraHop {
             DispatchQueue.main.async { DispatchQueue.main.async(execute: scrollToCenter) }
         } else {

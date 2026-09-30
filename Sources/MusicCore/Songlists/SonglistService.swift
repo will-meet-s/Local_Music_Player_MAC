@@ -152,6 +152,10 @@ public final class SonglistService: ObservableObject {
     }
 
     public func rename(_ id: UUID, to name: String) async -> Result<Void, SonglistError> {
+        PerfTrace.begin("songlist.rename")
+        // T-014 §2.4：summaries 这时已经更新过了（apply 在 commitAndApply 里同步调用），
+        // 排到下一次 runloop 再打点，界面已经刷新完。
+        defer { DispatchQueue.main.async { PerfTrace.end("songlist.rename") } }
         let knownName = songlistsByID[id]?.name ?? name
         let op = RenameSonglistOperation(id: id, name: name, knownName: knownName)
         switch await execute(op) {
@@ -176,6 +180,9 @@ public final class SonglistService: ObservableObject {
 
     /// 往已有歌单里加曲目（FR-015）。`tracks` 顺序由调用方用 `SelectionOrder` 排好。
     public func add(_ tracks: [Track], to id: UUID) async -> Result<AddResult, SonglistError> {
+        PerfTrace.begin("songlist.add")
+        // T-014 §2.4：排到下一次 runloop 再打点，界面已经刷新完。
+        defer { DispatchQueue.main.async { PerfTrace.end("songlist.add") } }
         let knownName = songlistsByID[id]?.name ?? ""
         let op = AddTracksOperation(id: id, tracks: tracks, knownName: knownName)
         let outcome = await commitAndApply(op)
@@ -211,6 +218,8 @@ public final class SonglistService: ObservableObject {
 
     /// 从歌单里移除曲目（FR-016）。返回实际移除的首数。
     public func remove(_ identities: [TrackIdentity], from id: UUID) async -> Result<Int, SonglistError> {
+        PerfTrace.begin("songlist.remove")
+        defer { DispatchQueue.main.async { PerfTrace.end("songlist.remove") } }
         let knownName = songlistsByID[id]?.name ?? ""
         let op = RemoveTracksOperation(id: id, identities: identities, knownName: knownName)
         let outcome = await commitAndApply(op)
@@ -229,6 +238,8 @@ public final class SonglistService: ObservableObject {
     /// 调整歌单内顺序（T-005，FR-017）。`toIndex` 是移除这一首之后的新列表里的位置。
     /// 目标曲目已被另一个实例移除时按成功处理，不写盘（方案 §2 规则 1）。
     public func move(_ identity: TrackIdentity, to toIndex: Int, in id: UUID) async -> Result<Void, SonglistError> {
+        PerfTrace.begin("songlist.move")
+        defer { DispatchQueue.main.async { PerfTrace.end("songlist.move") } }
         let knownName = songlistsByID[id]?.name ?? ""
         let op = MoveEntryOperation(id: id, identity: identity, toIndex: toIndex, knownName: knownName)
         let outcome = await commitAndApply(op)

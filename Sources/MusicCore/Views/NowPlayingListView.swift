@@ -56,6 +56,10 @@ struct NowPlayingListView: View {
                             isAvailable: availability.isAvailable(track.identity)
                         )
                         .tag(track.id)
+                        .onAppear {
+                            // T-014 §2.4（TC-190 ②）：nowplaying.open 的结束点。
+                            if index == 0 { PerfTrace.end("nowplaying.open") }
+                        }
                     }
                     .onMove(perform: handleMove)
                 }
