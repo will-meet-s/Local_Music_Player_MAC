@@ -1,6 +1,12 @@
 import XCTest
 @testable import MusicCore
 
+// SonglistService 是 @MainActor；这个类里既有测 SonglistStore（普通 actor）的用例，
+// 也有测 SonglistService 的用例（#2），后者需要在同一个 actor 上下文里构造/调用它，
+// 否则连 `SonglistService(root:)` 这个非 async 的初始化器都会被判成跨 actor、
+// 要求加 await（F-11）。整个类标 @MainActor 之后，测 Store 的用例里那些
+// `await store.xxx()` 仍然需要 await（Store 是另一个 actor，跨 actor调用）。
+@MainActor
 final class SonglistAddRemoveTests: XCTestCase {
 
     private var root: URL!

@@ -540,21 +540,34 @@ final class NowPlayingListTests: XCTestCase {
         let all = (0..<5).map { track("S\($0)") }
         list.playFromLibrary(all, at: 0)
 
-        _ = list.queue.next(auto: true) // 播完第 1 首
-        _ = list.queue.next(auto: true) // 播完第 2 首，当前第 3 首（对应设计里的 Z）
+        // F-8 真正出问题的场景是 X 已经放过（本轮里排在当前曲目之前），不是随便一首
+        // 不等于当前的曲目——于是需要推进到"顺序表里有位置在当前之前"的状态。
+        // 不能假设"固定 next() 两次就够"：初始选中位置是随机的，如果它落在顺序表
+        // 靠后的地方，一两次 next() 就会越过本轮末尾触发重新洗牌，把当前又冲回
+        // 顺序表开头（位置 0），那样就找不到"已经放过"的曲目了。这里改成循环推进，
+        // 直到当前曲目的位置不是 0 为止，几次内必然能碰到（除非连续多次都在重新
+        // 洗牌的那一刻停下来，概率极低，给了足够的尝试次数兜底）。
+        var curPos = 0
+        var found = false
+        for _ in 0..<20 {
+            _ = list.queue.next(auto: true)
+            guard let curIdx = list.queue.current, let pos = list.queue.currentOrder.firstIndex(of: curIdx) else {
+                return XCTFail("应有当前曲目")
+            }
+            curPos = pos
+            if curPos >= 1 {
+                found = true
+                break
+            }
+        }
+        guard found else {
+            return XCTFail("尝试多次仍未能让当前曲目停在顺序表的非开头位置")
+        }
 
         let currentIdentity = list.queue.current.map { list.items[$0].identity }
-        guard let curItemsIdx = list.queue.current,
-              let curPos = list.queue.currentOrder.firstIndex(of: curItemsIdx) else {
-            return XCTFail("应有当前曲目")
-        }
-        // 选一个不是当前曲目所在的位置（5 首里必然存在）；之前按"顺序表最后一位"挑，
-        // 当前曲目恰好落在最后一位时会选中它自己，playNext 会把它当成"就是正在播放的
-        // 那首"而直接过滤掉（changed == false），导致断言偶发失败——这里改成结构性地
-        // 找任意一个不等于 curPos 的位置，不依赖随机结果落在哪。
         let order = list.queue.currentOrder
-        guard let candidatePos = order.indices.first(where: { $0 != curPos }) else {
-            return XCTFail("应该不止一首曲目")
+        guard let candidatePos = order.indices.first(where: { $0 < curPos }) else {
+            return XCTFail("应该有已经放过的曲目")
         }
         let x = list.items[order[candidatePos]]
 
