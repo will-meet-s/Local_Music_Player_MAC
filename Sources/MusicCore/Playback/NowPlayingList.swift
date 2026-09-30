@@ -87,10 +87,10 @@ public struct NowPlayingList {
     /// 下一首播放（FR-004）。`tracks` 是用户选中的、要插入的曲目，
     /// `playing` 是当前正在播放曲目的 identity（用于去掉①和排除④）。
     public mutating func playNext(_ tracks: [Track], playing: TrackIdentity?) -> EditResult {
-        var seen = Set<TrackIdentity>()
+        var toInsertIdentities = Set<TrackIdentity>()
         var toInsert: [Track] = []
         for track in tracks {
-            guard track.identity != playing, seen.insert(track.identity).inserted else { continue }
+            guard track.identity != playing, toInsertIdentities.insert(track.identity).inserted else { continue }
             toInsert.append(track)
         }
         guard !toInsert.isEmpty else { return EditResult() }
@@ -105,16 +105,24 @@ public struct NowPlayingList {
             anchor = 0
         }
 
-        var newItems = items
+        // 单次遍历 items，把要挪走的摘出来，同时数出 anchor 之前被摘走了几个用来修正
+        // anchor；调用方可能传入大批量曲目（多选），禁止嵌套 firstIndex(where: identity==)
+        // 造成 O(输入 × items) 的退化（方案 §4 性能类要求）。
+        var remaining: [Track] = []
+        remaining.reserveCapacity(items.count)
         var relocatedIdentities = Set<TrackIdentity>()
-        for track in toInsert {
-            if let existingIndex = newItems.firstIndex(where: { $0.identity == track.identity }) {
-                if existingIndex < anchor { anchor -= 1 }
-                newItems.remove(at: existingIndex)
+        var removedBeforeAnchor = 0
+        for (index, track) in items.enumerated() {
+            if toInsertIdentities.contains(track.identity) {
                 relocatedIdentities.insert(track.identity)
+                if index < anchor { removedBeforeAnchor += 1 }
+            } else {
+                remaining.append(track)
             }
         }
-        anchor = min(max(anchor, 0), newItems.count)
+        anchor = min(max(anchor - removedBeforeAnchor, 0), remaining.count)
+
+        var newItems = remaining
         newItems.insert(contentsOf: toInsert, at: anchor)
 
         let placement: EditPlacement = cur != nil ? .afterCurrent : (queue.pendingResumeItemIndex != nil ? .atResume : .atStart)
@@ -123,22 +131,26 @@ public struct NowPlayingList {
 
     /// 加到末尾（FR-005）。正在播放的那首即使在输入里也不去掉：它被挪到末尾，播放不中断。
     public mutating func append(_ tracks: [Track], playing: TrackIdentity?) -> EditResult {
-        var seen = Set<TrackIdentity>()
+        var toInsertIdentities = Set<TrackIdentity>()
         var toInsert: [Track] = []
         for track in tracks {
-            guard seen.insert(track.identity).inserted else { continue }
+            guard toInsertIdentities.insert(track.identity).inserted else { continue }
             toInsert.append(track)
         }
         guard !toInsert.isEmpty else { return EditResult() }
 
-        var newItems = items
+        var remaining: [Track] = []
+        remaining.reserveCapacity(items.count)
         var relocatedIdentities = Set<TrackIdentity>()
-        for track in toInsert {
-            if let existingIndex = newItems.firstIndex(where: { $0.identity == track.identity }) {
-                newItems.remove(at: existingIndex)
+        for track in items {
+            if toInsertIdentities.contains(track.identity) {
                 relocatedIdentities.insert(track.identity)
+            } else {
+                remaining.append(track)
             }
         }
+
+        var newItems = remaining
         newItems.append(contentsOf: toInsert)
 
         return commitEdit(newItems, placement: .randomInRemainder, relocated: relocatedIdentities)
@@ -149,12 +161,18 @@ public struct NowPlayingList {
         let validIndices = indices.filter { items.indices.contains($0) }
         guard !validIndices.isEmpty else { return EditResult() }
 
+        let oldItems = items
         var newItems = items
         for index in validIndices.sorted(by: >) {
             newItems.remove(at: index)
         }
 
-        return commitEdit(newItems, placement: .keepNatural, relocated: [])
+        setItems(newItems)
+        let map = oldItems.map { identityIndex[$0.identity] }
+        queue.applyEdit(map: map, newCount: newItems.count, added: [], placement: .keepNatural, relocated: [])
+        markEdited()
+
+        return EditResult(inserted: 0, relocated: 0, changed: true)
     }
 
     /// 拖动排序（FR-007）。`to` 是移除 `from` 之后、新列表里的位置。
@@ -163,13 +181,15 @@ public struct NowPlayingList {
             return EditResult()
         }
 
+        let oldItems = items
         var newItems = items
         let moved = newItems.remove(at: from)
         newItems.insert(moved, at: to)
 
-        let (map, _) = Self.buildEditMapping(oldItems: items, newItems: newItems)
         setItems(newItems)
-        queue.applyEdit(map: map, newCount: newItems.count, added: [], placement: .keepNatural, relocated: [to])
+        let map = oldItems.map { identityIndex[$0.identity] }
+        let relocated: Set<Int> = identityIndex[moved.identity].map { Set([$0]) } ?? []
+        queue.applyEdit(map: map, newCount: newItems.count, added: [], placement: .keepNatural, relocated: relocated)
         markEdited()
 
         return EditResult(inserted: 0, relocated: 1, changed: true)
@@ -188,20 +208,33 @@ public struct NowPlayingList {
         items = newItems
         // 大小写敏感的卷上 a.mp3 和 A.mp3 是同一个 identity（T-002 方案 §4），
         // 保留第一次出现的下标，不能用 uniqueKeysWithValues（重复键会崩溃）。
-        identityIndex = Dictionary(items.enumerated().map { ($1.identity, $0) }, uniquingKeysWith: { first, _ in first })
+        var index: [TrackIdentity: Int] = [:]
+        index.reserveCapacity(newItems.count)
+        for (offset, track) in newItems.enumerated() where index[track.identity] == nil {
+            index[track.identity] = offset
+        }
+        identityIndex = index
     }
 
-    /// `playNext`/`append`/`remove` 共用的收尾：算出 `map`/`added`、提交新 `items`、
+    /// `playNext`/`append` 共用的收尾：算出 `map`/`added`、提交新 `items`、
     /// 推进队列、转入独立状态，返回编辑结果。
+    ///
+    /// 复用 `setItems` 刚建好的 `identityIndex` 取代新下标，不再单独为 `newItems`
+    /// 重建一份索引——1 万首规模下，少建一份哈希表对性能类单测有意义。
     private mutating func commitEdit(
         _ newItems: [Track], placement: EditPlacement, relocated relocatedIdentities: Set<TrackIdentity>
     ) -> EditResult {
-        let (map, added) = Self.buildEditMapping(oldItems: items, newItems: newItems)
-        let relocatedNewIndices = Set(
-            newItems.enumerated().compactMap { relocatedIdentities.contains($0.element.identity) ? $0.offset : nil }
-        )
+        let oldItems = items
+        let oldIdentitySet = Set(oldItems.map(\.identity))
 
         setItems(newItems)
+
+        let map = oldItems.map { identityIndex[$0.identity] }
+        let added = newItems.enumerated().compactMap { index, track in
+            oldIdentitySet.contains(track.identity) ? nil : index
+        }
+        let relocatedNewIndices = Set(relocatedIdentities.compactMap { identityIndex[$0] })
+
         queue.applyEdit(map: map, newCount: newItems.count, added: added, placement: placement, relocated: relocatedNewIndices)
         markEdited()
 
@@ -211,19 +244,5 @@ public struct NowPlayingList {
     private mutating func markEdited() {
         state = .independent
         source = .edited
-    }
-
-    /// 按 identity 对齐旧列表和新列表：`map[旧下标]` 是新下标（nil 表示被移除）；
-    /// `added` 是新列表里、旧列表中不存在同一 identity 的下标（按新列表顺序）。
-    private static func buildEditMapping(oldItems: [Track], newItems: [Track]) -> (map: [Int?], added: [Int]) {
-        let newIndexByIdentity = Dictionary(
-            newItems.enumerated().map { ($1.identity, $0) }, uniquingKeysWith: { first, _ in first }
-        )
-        let oldIdentities = Set(oldItems.map(\.identity))
-        let map = oldItems.map { newIndexByIdentity[$0.identity] }
-        let added = newItems.enumerated().compactMap { index, track in
-            oldIdentities.contains(track.identity) ? nil : index
-        }
-        return (map, added)
     }
 }
