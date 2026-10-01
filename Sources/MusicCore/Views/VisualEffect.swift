@@ -48,17 +48,24 @@ public struct VisualEffectView: NSViewRepresentable {
 /// 让承载它的窗口变透明。
 ///
 /// `.behindWindow` 模式要求窗口本身不是不透明的，否则模糊层背后是纯色窗口背景，
-/// 看不到桌面 —— 磨砂就成了灰色板子。标题栏保持系统默认样式，它自己会画出
-/// 与内容区一致的材质。
+/// 看不到桌面 —— 磨砂就成了灰色板子。
+///
+/// T-018：**主窗口**额外加上 `fullSizeContentView` + 透明标题栏，让标题栏那一条
+/// 和内容区显示同一层磨砂，不再单独着色（FR-031 ①②）。状态栏控制板是
+/// `NSPanel`，不碰它（FR-031 ⑥）。
 struct TransparentWindow: NSViewRepresentable {
 
     func makeNSView(context: Context) -> NSView {
         let view = NSView()
         // 插入视图层级时 window 还是 nil，延到下一个 runloop 再取
         DispatchQueue.main.async {
-            guard let window = view.window else { return }
+            guard let window = view.window, !(window is NSPanel) else { return }
             window.isOpaque = false
             window.backgroundColor = .clear
+            window.styleMask.insert(.fullSizeContentView)
+            window.titlebarAppearsTransparent = true
+            window.titleVisibility = .hidden // 「窗口」菜单里仍然显示「音乐播放器」
+            window.titlebarSeparatorStyle = .none // FR-031 ②：没有分隔线
         }
         return view
     }
@@ -67,12 +74,14 @@ struct TransparentWindow: NSViewRepresentable {
 }
 
 extension View {
-    /// 给整个窗口铺上磨砂背景。
+    /// 给整个窗口铺上磨砂背景。T-018：`.ignoresSafeArea()` 加在磨砂层上，不是
+    /// 整个视图树上——这样磨砂能铺到标题栏，但 `HeaderBar` 仍然乖乖排在标题栏
+    /// 让出来的安全区下面，不会钻到三个窗口按钮底下（方案 §7 易踩的坑）。
     func frostedBackground(
         _ material: NSVisualEffectView.Material = .underWindowBackground,
         opacity: Double = 1
     ) -> some View {
-        background(VisualEffectView(material: material, opacity: opacity))
+        background(VisualEffectView(material: material, opacity: opacity).ignoresSafeArea())
             .background(TransparentWindow())
     }
 }
