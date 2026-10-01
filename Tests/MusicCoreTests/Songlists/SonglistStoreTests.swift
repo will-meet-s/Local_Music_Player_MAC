@@ -399,12 +399,39 @@ final class SonglistStoreTests: XCTestCase {
 
     // MARK: - #12（F-20，安全审计 SEC-02）文件名大小写混淆
 
+    // F-21 复核 R-2：只放一个大写文件名，不依赖卷是否区分大小写，两种卷上都成立。
     func testLoadAllTreatsUppercaseFileNameAsLoadFailure() async throws {
         try FileManager.default.createDirectory(at: songlistsDir(), withIntermediateDirectories: true)
 
         let id = UUID()
-        let lowerName = "\(id.uuidString.lowercased()).json"
         let upperName = "\(id.uuidString).json" // uuidString 本身就是大写的
+
+        let songlist = Songlist(id: id, name: "大写版", createdAt: Date(), entries: [])
+        let data = try SonglistCoding.makeEncoder().encode(songlist)
+        try data.write(to: songlistsDir().appendingPathComponent(upperName))
+
+        let store = SonglistStore(root: root)
+        let snapshot = await store.loadAll()
+
+        XCTAssertNil(snapshot.songlists[id], "大写文件名不应该被当成有效歌单加载")
+        XCTAssertTrue(snapshot.failures.contains { $0.fileName == upperName }, "大写的那个应该进入 loadFailures")
+    }
+
+    // 「同一个目录里同时放大写和小写两个文件名」只在区分大小写的卷上才是两个不同的
+    // 文件；在不区分大小写（但保留大小写）的卷上，第二次写其实覆盖了第一个，断言
+    // 「两个都在」没有意义——macOS CI runner 的 APFS 默认就是这种卷。只在
+    // volumeSupportsCaseSensitiveNames == true 时才跑（F-21 复核 R-2）。
+    func testLoadAllKeepsLowercaseAndFailsUppercaseWhenVolumeIsCaseSensitive() async throws {
+        try FileManager.default.createDirectory(at: songlistsDir(), withIntermediateDirectories: true)
+
+        let resourceValues = try songlistsDir().resourceValues(forKeys: [.volumeSupportsCaseSensitiveNamesKey])
+        guard resourceValues.volumeSupportsCaseSensitiveNames == true else {
+            throw XCTSkip("这台机器的卷不区分大小写，大小写两个文件名是同一个文件，跳过")
+        }
+
+        let id = UUID()
+        let lowerName = "\(id.uuidString.lowercased()).json"
+        let upperName = "\(id.uuidString).json"
 
         let songlist = Songlist(id: id, name: "小写版", createdAt: Date(), entries: [])
         let data = try SonglistCoding.makeEncoder().encode(songlist)

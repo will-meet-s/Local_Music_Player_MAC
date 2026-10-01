@@ -47,10 +47,18 @@ public actor SonglistStore {
     /// 歌单名、曲目路径一律不记。拒绝删除用 `.error`，其他用 `.notice`。
     private static let logger = Logger(subsystem: "com.local.macmusicplayer", category: "Songlist")
 
-    private func log(_ event: String, fileName: String? = nil, errno errnoValue: Int32? = nil, level: OSLogType = .notice) {
+    // F-21 复核 R-1：OSLogType 没有 .notice，notice 级别对应的是 .default。
+    private func log(_ event: String, fileName: String? = nil, errno errnoValue: Int32? = nil, level: OSLogType = .default) {
         let name = fileName ?? "-"
         let code = errnoValue.map(String.init) ?? "-"
         Self.logger.log(level: level, "\(event, privacy: .public) file=\(name, privacy: .public) errno=\(code, privacy: .public)")
+    }
+
+    /// 文件名是否是合法的 UUID.json（`remove(fileName:)` 用的同一条规则）。
+    /// F-21 复核 R-3：只有校验过的文件名才值得原样记进日志——`songlists/` 下任何
+    /// `*.json` 都会走到 `markFailed`，用户手动放进去的文件名可能不是这个格式。
+    private static func isValidSonglistFileName(_ name: String) -> Bool {
+        name.range(of: #"^[0-9a-f-]{36}\.json$"#, options: .regularExpression) != nil
     }
 
     /// 供测试从外部设置 `beforeRename`（跨 actor 隔离，需要 `await`）。
@@ -261,7 +269,10 @@ public actor SonglistStore {
     private func markFailed(name: String, reason: String) {
         songlistsByFile.removeValue(forKey: name)
         failures[name] = LoadFailure(fileName: name, reason: reason)
-        log("load failed", fileName: name)
+        // F-21 复核 R-3：只有合法的 UUID.json 才记原名；其余（例如用户手动放进去的
+        // 「我的歌单备份.json」）记 "-"，和 remove(fileName:) 对「没验证过的不记」的
+        // 口径保持一致。
+        log("load failed", fileName: Self.isValidSonglistFileName(name) ? name : nil)
     }
 
     /// 拿到锁时删除 `songlists/` 下所有 `*.json.tmp-*` 残留（持锁时不可能有别的进程正在写）。
@@ -296,7 +307,7 @@ public actor SonglistStore {
     /// internal（非 private）是为了让测试用 `@testable import` 直接验证这条防护本身
     /// （F-5：公开 API 的 `targetID` 恒为合法 UUID，无法从外部触发越界路径）。
     func remove(fileName: String) throws {
-        guard fileName.range(of: #"^[0-9a-f-]{36}\.json$"#, options: .regularExpression) != nil else {
+        guard Self.isValidSonglistFileName(fileName) else {
             // F-21：不记 fileName 本身——这个分支恰恰是它还没验证过，可能是一次
             // 路径穿越尝试，原样记下来就违反了「不记路径」。
             log("remove rejected: invalid file name pattern", level: .error)
