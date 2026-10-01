@@ -3,10 +3,18 @@ import SwiftUI
 public struct ContentView: View {
     @EnvironmentObject private var vm: PlayerViewModel
     @EnvironmentObject private var songlists: SonglistService
-    /// T-019：播放列表面板的开关，多个窗口共用（FR-030 ⑥）。
+    /// T-019：播放列表抽屉的开关，多个窗口共用（FR-030 ⑨）。初值直接来自
+    /// `@AppStorage`、用于首次渲染——启动恢复时不播放滑入动画（方案 §7 易踩的坑）。
     @AppStorage("nowPlayingPanelOpen") private var showNowPlaying = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     public init() {}
+
+    /// T-019 v2：动画和 `nowplaying.open` 打点都集中在这一处（方案 §2）。
+    private func setNowPlaying(open: Bool) {
+        if open && !showNowPlaying { PerfTrace.begin("nowplaying.open") }
+        withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.25)) { showNowPlaying = open }
+    }
 
     public var body: some View {
         VStack(spacing: 0) {
@@ -29,23 +37,30 @@ public struct ContentView: View {
                 Divider()
             }
 
+            // T-019 v2：HSplitView 恢复成基线的两栏，抽屉改成「正在播放」区上的
+            // overlay，不参与布局——两栏宽度都不变，收起后和打开前完全一样（FR-030 ④）。
             HSplitView {
                 LeftPaneView()
                     .frame(minWidth: 260, idealWidth: 320, maxWidth: 460)
                 NowPlayingView()
-                    .frame(minWidth: showNowPlaying ? 320 : 360, maxWidth: .infinity)
-                // T-019：开关开着时在最右边多出第三栏；必须放在 HSplitView 的最后一个
-                // 子视图位置——放前面的话，前面两栏的身份会变，曲库列表会重建，
-                // 滚动位置就丢了（方案 §7 易踩的坑）。
-                if showNowPlaying {
-                    NowPlayingListView()
-                        .frame(minWidth: 260, idealWidth: 300, maxWidth: 420)
-                }
+                    .frame(minWidth: 360, maxWidth: .infinity)
+                    .overlay(alignment: .trailing) {
+                        if showNowPlaying {
+                            NowPlayingDrawer(onClose: { setNowPlaying(open: false) })
+                                .transition(reduceMotion ? .identity : .move(edge: .trailing))
+                        }
+                    }
+                    // .clipped() 加在 NowPlayingView 上（overlay 之后），不能加在抽屉
+                    // 自己身上，否则滑动时抽屉还是会画出「正在播放」区的范围（方案 §7）。
+                    .clipped()
             }
             .frame(maxHeight: .infinity)
 
             Divider()
-            ControlsBar(showNowPlaying: $showNowPlaying)
+            ControlsBar(
+                isNowPlayingOpen: showNowPlaying,
+                onToggleNowPlaying: { setNowPlaying(open: !showNowPlaying) }
+            )
         }
         .frostedBackground(opacity: vm.backgroundOpacity)
         .task {

@@ -6,6 +6,9 @@ struct NowPlayingListView: View {
     @EnvironmentObject private var availability: AvailabilityStore
     @EnvironmentObject private var songlists: SonglistService
     @State private var selection = Set<URL>()
+    /// T-019 v2：在抽屉里显示时传入，顶部多一个关闭按钮；`nil` 时（理论上现在
+    /// 只会在抽屉里用，保留这个口子只是不绑死调用方）不显示。
+    var onClose: (() -> Void)? = nil
 
     var body: some View {
         VStack(spacing: 0) {
@@ -14,8 +17,8 @@ struct NowPlayingListView: View {
             content
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        // 背景与曲库列表相同：磨砂 + 隐藏 List 自带的不透明背景
-        .background(VisualEffectView(material: .sidebar, opacity: vm.backgroundOpacity))
+        // T-019 v2：背景改由 NowPlayingDrawer 统一提供（两层磨砂），这里不再自带
+        // 一层，否则会叠出三层、颜色偏深。
         // T-007 §2.3：打开 PL 页时这一页的全部曲目用 high 优先级检查，
         // 离开时把还没查完的降级为 low（不丢弃、不打断正在检查的那个）。
         .task { vm.checkAvailabilityHigh(vm.nowPlaying.items) }
@@ -38,6 +41,13 @@ struct NowPlayingListView: View {
             .disabled(vm.nowPlaying.items.isEmpty)
             Button("清空") { vm.clearNowPlaying() }
                 .disabled(vm.nowPlaying.items.isEmpty)
+            if let onClose {
+                Button(action: onClose) {
+                    Image(systemName: "xmark")
+                }
+                .buttonStyle(.borderless)
+                .help("收起播放列表")
+            }
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 10)
