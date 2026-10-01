@@ -53,24 +53,69 @@ public struct VisualEffectView: NSViewRepresentable {
 /// T-018：**主窗口**额外加上 `fullSizeContentView` + 透明标题栏，让标题栏那一条
 /// 和内容区显示同一层磨砂，不再单独着色（FR-031 ①②）。状态栏控制板是
 /// `NSPanel`，不碰它（FR-031 ⑥）。
+///
+/// v2（F-23）：v1 只在窗口出现时设置过一次，SwiftUI 在窗口重新获得焦点、退出全屏、
+/// 场景更新时会按自己记录的样式把这些设置改回默认值。这里把设置抽成 `configure`，
+/// 在 `updateNSView` 和窗口的 `didBecomeKey`/`didExitFullScreen` 通知时都重新执行一遍
+/// 作为兜底（幂等，重复执行没有副作用）；`WindowGroup` 这边另外加了
+/// `.windowStyle(.hiddenTitleBar)`，让 SwiftUI 自己记录的样式本身就是这个样子。
 struct TransparentWindow: NSViewRepresentable {
+
+    private static func configure(_ window: NSWindow) {
+        guard !(window is NSPanel) else { return } // 状态栏控制板不动（FR-031 ⑥）
+        window.isOpaque = false
+        window.backgroundColor = .clear
+        window.styleMask.insert(.fullSizeContentView)
+        window.titlebarAppearsTransparent = true
+        window.titleVisibility = .hidden // 「窗口」菜单里仍然显示「音乐播放器」
+        window.titlebarSeparatorStyle = .none // FR-031 ②：没有分隔线
+    }
 
     func makeNSView(context: Context) -> NSView {
         let view = NSView()
         // 插入视图层级时 window 还是 nil，延到下一个 runloop 再取
         DispatchQueue.main.async {
-            guard let window = view.window, !(window is NSPanel) else { return }
-            window.isOpaque = false
-            window.backgroundColor = .clear
-            window.styleMask.insert(.fullSizeContentView)
-            window.titlebarAppearsTransparent = true
-            window.titleVisibility = .hidden // 「窗口」菜单里仍然显示「音乐播放器」
-            window.titlebarSeparatorStyle = .none // FR-031 ②：没有分隔线
+            guard let window = view.window else { return }
+            Self.configure(window)
+            context.coordinator.observe(window)
         }
         return view
     }
 
-    func updateNSView(_ nsView: NSView, context: Context) {}
+    func updateNSView(_ nsView: NSView, context: Context) {
+        guard let window = nsView.window else { return }
+        Self.configure(window)
+    }
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator()
+    }
+
+    static func dismantleNSView(_ nsView: NSView, coordinator: Coordinator) {
+        coordinator.stopObserving()
+    }
+
+    /// 持有 `didBecomeKey`/`didExitFullScreen` 的观察者令牌，`dismantleNSView` 时移除。
+    final class Coordinator {
+        private var tokens: [NSObjectProtocol] = []
+
+        func observe(_ window: NSWindow) {
+            guard tokens.isEmpty else { return }
+            let center = NotificationCenter.default
+            for name in [NSWindow.didBecomeKeyNotification, NSWindow.didExitFullScreenNotification] {
+                tokens.append(center.addObserver(forName: name, object: window, queue: .main) { [weak window] _ in
+                    guard let window else { return }
+                    TransparentWindow.configure(window)
+                })
+            }
+        }
+
+        func stopObserving() {
+            let center = NotificationCenter.default
+            tokens.forEach(center.removeObserver)
+            tokens.removeAll()
+        }
+    }
 }
 
 extension View {
