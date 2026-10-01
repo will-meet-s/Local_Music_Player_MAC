@@ -61,14 +61,17 @@ public struct VisualEffectView: NSViewRepresentable {
 /// `.windowStyle(.hiddenTitleBar)`，让 SwiftUI 自己记录的样式本身就是这个样子。
 struct TransparentWindow: NSViewRepresentable {
 
+    /// F-24：`updateNSView` 在 SwiftUI 每次重绘时都会被调用（播放时每 0.1 秒一次）。
+    /// 每一项都先判断是否已经是目标值，不同才赋值——已经设置过之后，这里每次都
+    /// 直接返回、不触碰任何属性，不会让 AppKit 反复重排标题栏布局。
     private static func configure(_ window: NSWindow) {
         guard !(window is NSPanel) else { return } // 状态栏控制板不动（FR-031 ⑥）
-        window.isOpaque = false
-        window.backgroundColor = .clear
-        window.styleMask.insert(.fullSizeContentView)
-        window.titlebarAppearsTransparent = true
-        window.titleVisibility = .hidden // 「窗口」菜单里仍然显示「音乐播放器」
-        window.titlebarSeparatorStyle = .none // FR-031 ②：没有分隔线
+        if window.isOpaque { window.isOpaque = false }
+        if window.backgroundColor != .clear { window.backgroundColor = .clear }
+        if !window.styleMask.contains(.fullSizeContentView) { window.styleMask.insert(.fullSizeContentView) }
+        if !window.titlebarAppearsTransparent { window.titlebarAppearsTransparent = true }
+        if window.titleVisibility != .hidden { window.titleVisibility = .hidden } // 「窗口」菜单里仍然显示「音乐播放器」
+        if window.titlebarSeparatorStyle != .none { window.titlebarSeparatorStyle = .none } // FR-031 ②：没有分隔线
     }
 
     func makeNSView(context: Context) -> NSView {
