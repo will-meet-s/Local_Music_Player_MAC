@@ -26,16 +26,35 @@ final class PerfTraceTests: XCTestCase {
         )
     }
 
-    // #4：开关关闭时 begin/end 各调 1 万次，≤ 5 ms，不创建文件。
+    // #4（v2，F-25）：开关关闭时 begin/end 各调 1 万次，中位数 ≤ 20 ms，不创建文件。
+    // v1 在计时循环里拼接打点名，测到的主要是字符串插值的开销而不是 PerfTrace 本身，
+    // 而且只测 1 次，在共享 CI 机器上会波动；改成打点名事先建好、预热 1 次、计时 5 次
+    // 取中位数（沿用本单性能类单测的统一写法）。
     func testTenThousandBeginEndCallsWhenDisabledPerformance() {
-        let start = Date()
-        for i in 0..<10_000 {
-            PerfTrace.begin("perf.test.\(i % 8)")
-            PerfTrace.end("perf.test.\(i % 8)")
-        }
-        let elapsed = Date().timeIntervalSince(start)
+        let names = (0..<8).map { "perf.test.\($0)" }
 
-        XCTAssertLessThanOrEqual(elapsed, 0.005, "1 万次 begin/end 耗时 \(elapsed * 1000) ms")
+        func runOnce() -> TimeInterval {
+            let start = Date()
+            for i in 0..<10_000 {
+                PerfTrace.begin(names[i % 8])
+                PerfTrace.end(names[i % 8])
+            }
+            return Date().timeIntervalSince(start)
+        }
+
+        // 预热
+        _ = runOnce()
+
+        var durations: [TimeInterval] = []
+        for _ in 0..<5 {
+            durations.append(runOnce())
+        }
+
+        let sorted = durations.sorted()
+        let median = sorted[sorted.count / 2]
+        // 关闭状态下只是读一下 static let 然后直接返回；如果误写了文件，1 万次
+        // 至少要几百毫秒，20 ms 仍然能发现这个问题（方案 v2 §7 #4）。
+        XCTAssertLessThanOrEqual(median, 0.02, "5 次耗时：\(durations)")
         XCTAssertFalse(
             FileManager.default.fileExists(atPath: logURL.path),
             "关闭状态下不应该创建 perf.log"
