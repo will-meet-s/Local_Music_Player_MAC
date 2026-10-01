@@ -1,5 +1,6 @@
 import Foundation
 import Darwin
+import os
 
 /// 只管磁盘：加载全部、文件锁、同步变化、原子写、删除。不含业务规则。
 ///
@@ -42,6 +43,16 @@ public actor SonglistStore {
     /// 测试钩子：在 `rename` 之前调用，可以抛错模拟崩溃（TC 用于验证写入中断后的行为）。
     public var beforeRename: (@Sendable () throws -> Void)?
 
+    /// F-21（安全审计 SEC-03，T-003 §5 日志脱敏）：只记文件名（UUID）和 errno，
+    /// 歌单名、曲目路径一律不记。拒绝删除用 `.error`，其他用 `.notice`。
+    private static let logger = Logger(subsystem: "com.local.macmusicplayer", category: "Songlist")
+
+    private func log(_ event: String, fileName: String? = nil, errno errnoValue: Int32? = nil, level: OSLogType = .notice) {
+        let name = fileName ?? "-"
+        let code = errnoValue.map(String.init) ?? "-"
+        Self.logger.log(level: level, "\(event, privacy: .public) file=\(name, privacy: .public) errno=\(code, privacy: .public)")
+    }
+
     /// 供测试从外部设置 `beforeRename`（跨 actor 隔离，需要 `await`）。
     public func setBeforeRename(_ hook: (@Sendable () throws -> Void)?) {
         beforeRename = hook
@@ -54,7 +65,10 @@ public actor SonglistStore {
     }
 
     private var currentSnapshot: Snapshot {
-        let byID = Dictionary(uniqueKeysWithValues: songlistsByFile.values.map { ($0.id, $0) })
+        // F-20（安全审计 SEC-02 ②）：正常情况下 songlistsByFile 的 id 不会重复
+        // （每个文件名只认一个 id），这里只是兜底，重复时保留先遇到的那个，
+        // 不能用 uniqueKeysWithValues——重复键会直接崩溃。
+        let byID = Dictionary(songlistsByFile.values.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         return Snapshot(songlists: byID, failures: Array(failures.values))
     }
 
@@ -98,6 +112,7 @@ public actor SonglistStore {
         } catch {
             // 目录不存在且创建失败（例如上级目录只读）；目录已存在但被设为只读的情况
             // 在下面写临时文件时通过 errno 精确映射，见 writeAtomically。
+            log("commit failed: ensureExists", fileName: op.targetID.map(fileName(for:)))
             return CommitOutcome(snapshot: currentSnapshot, before: nil, result: .failure(.saveFailed(reason: "数据文件夹没有写入权限")))
         }
 
@@ -108,8 +123,10 @@ public actor SonglistStore {
             fd = acquiredFD
         case .openFailed(let errnoValue):
             let reason = POSIXIOError(errnoValue: errnoValue).reason
+            log("commit failed: lock open", fileName: op.targetID.map(fileName(for:)), errno: errnoValue)
             return CommitOutcome(snapshot: currentSnapshot, before: nil, result: .failure(.saveFailed(reason: reason)))
         case .timedOut:
+            log("commit failed: lock timed out", fileName: op.targetID.map(fileName(for:)))
             return CommitOutcome(snapshot: currentSnapshot, before: nil, result: .failure(.saveFailed(reason: "歌单正在被另一个窗口保存，请稍后重试")))
         }
         defer {
@@ -121,6 +138,7 @@ public actor SonglistStore {
 
         // 目标歌单的文件这时读取失败：不覆盖它（文件名由 UUID 决定，不依赖内容能否解析）
         if let targetID = op.targetID, failures[fileName(for: targetID)] != nil {
+            log("commit failed: target file corrupted", fileName: fileName(for: targetID))
             return CommitOutcome(snapshot: currentSnapshot, before: nil, result: .failure(.saveFailed(reason: "歌单文件已损坏，已保留原文件")))
         }
 
@@ -130,8 +148,10 @@ public actor SonglistStore {
         do {
             applied = try op.apply(to: fresh, now: Date())
         } catch let error as SonglistError {
+            log("commit failed: apply rejected", fileName: op.targetID.map(fileName(for:)))
             return CommitOutcome(snapshot: currentSnapshot, before: before, result: .failure(error))
         } catch {
+            log("commit failed: apply threw", fileName: op.targetID.map(fileName(for:)))
             return CommitOutcome(snapshot: currentSnapshot, before: before, result: .failure(.saveFailed(reason: "写入失败")))
         }
 
@@ -148,21 +168,26 @@ public actor SonglistStore {
             do {
                 try write(toWrite)
             } catch let error as POSIXIOError {
+                log("commit failed: write", fileName: fileName(for: toWrite.id), errno: error.errnoValue)
                 return CommitOutcome(snapshot: currentSnapshot, before: before, result: .failure(.saveFailed(reason: error.reason)))
             } catch {
+                log("commit failed: write", fileName: fileName(for: toWrite.id))
                 return CommitOutcome(snapshot: currentSnapshot, before: before, result: .failure(.saveFailed(reason: "写入失败")))
             }
             return CommitOutcome(snapshot: currentSnapshot, before: before, result: .success(toWrite))
         } else {
             // 删除
             guard let id = op.targetID else {
+                log("commit failed: delete without targetID")
                 return CommitOutcome(snapshot: currentSnapshot, before: before, result: .failure(.saveFailed(reason: "写入失败")))
             }
             do {
                 try remove(fileName: fileName(for: id))
             } catch let error as POSIXIOError {
+                log("commit failed: remove", fileName: fileName(for: id), errno: error.errnoValue)
                 return CommitOutcome(snapshot: currentSnapshot, before: before, result: .failure(.saveFailed(reason: error.reason)))
             } catch {
+                log("commit failed: remove", fileName: fileName(for: id))
                 return CommitOutcome(snapshot: currentSnapshot, before: before, result: .failure(.saveFailed(reason: "写入失败")))
             }
             return CommitOutcome(snapshot: currentSnapshot, before: before, result: .success(nil))
@@ -190,6 +215,13 @@ public actor SonglistStore {
         }
 
         for name in jsonNames.sorted() {
+            // F-20（安全审计 SEC-02 ①）：文件名只接受全小写。大小写不敏感的文件系统上，
+            // `ABC….json` 和 `abc….json` 可能被当成同一个文件处理，混淆 identity
+            // 判定；只认全小写的那个，大写的按「读取失败」处理，原样保留、不碰它。
+            guard name == name.lowercased() else {
+                markFailed(name: name, reason: "文件名必须全小写")
+                continue
+            }
             let fileURL = songlistsDir.appendingPathComponent(name)
             guard let attrs = try? fm.attributesOfItem(atPath: fileURL.path),
                   let modifiedAt = attrs[.modificationDate] as? Date,
@@ -229,6 +261,7 @@ public actor SonglistStore {
     private func markFailed(name: String, reason: String) {
         songlistsByFile.removeValue(forKey: name)
         failures[name] = LoadFailure(fileName: name, reason: reason)
+        log("load failed", fileName: name)
     }
 
     /// 拿到锁时删除 `songlists/` 下所有 `*.json.tmp-*` 残留（持锁时不可能有别的进程正在写）。
@@ -264,15 +297,23 @@ public actor SonglistStore {
     /// （F-5：公开 API 的 `targetID` 恒为合法 UUID，无法从外部触发越界路径）。
     func remove(fileName: String) throws {
         guard fileName.range(of: #"^[0-9a-f-]{36}\.json$"#, options: .regularExpression) != nil else {
+            // F-21：不记 fileName 本身——这个分支恰恰是它还没验证过，可能是一次
+            // 路径穿越尝试，原样记下来就违反了「不记路径」。
+            log("remove rejected: invalid file name pattern", level: .error)
             throw POSIXIOError(errnoValue: EINVAL)
         }
         let target = songlistsDir.appendingPathComponent(fileName)
         guard target.deletingLastPathComponent().standardizedFileURL == songlistsDir.standardizedFileURL else {
+            // 这里的 fileName 已经过上面的正则校验，是安全的 UUID.json，可以记。
+            log("remove rejected: path escapes songlists directory", fileName: fileName, level: .error)
             throw POSIXIOError(errnoValue: EINVAL)
         }
 
         let result = target.path.withCString { unlink($0) }
-        guard result == 0 else { throw POSIXIOError(errnoValue: errno) }
+        guard result == 0 else {
+            log("remove failed", fileName: fileName, errno: errno)
+            throw POSIXIOError(errnoValue: errno)
+        }
 
         songlistsByFile.removeValue(forKey: fileName)
         stamps.removeValue(forKey: fileName)
@@ -331,13 +372,20 @@ struct POSIXIOError: Error {
 /// 不用 `FileManager.replaceItemAt`：只读目录里的行为和错误码不稳定，还会生成备份文件。
 ///
 /// internal（非 private）：T-010 的 `NowPlayingStore` 复用同一套原子写实现（方案 §6）。
+///
+/// F-19（安全审计 SEC-01）：临时文件路径上可能被预先放了一个指向目录外文件的符号
+/// 链接——原来的 `O_TRUNC` 不检查目标是不是符号链接，`open` 会跟着链接走，把内容
+/// 写进那个外部文件。改成先 `unlink` 清场（文件不存在是最常见的情况，忽略结果，
+/// 交给下面的 `O_EXCL` 做最终把关），再用 `O_EXCL | O_NOFOLLOW` 打开：目标已经
+/// 存在（包括是符号链接）就直接拒绝，返回 `EEXIST`/`ELOOP`，不会跟着链接走。
 func writeAtomically(
     _ data: Data,
     tempURL: URL,
     finalURL: URL,
     beforeRename: (@Sendable () throws -> Void)?
 ) throws {
-    let fd = tempURL.path.withCString { open($0, O_WRONLY | O_CREAT | O_TRUNC, 0o600) }
+    _ = tempURL.path.withCString { unlink($0) }
+    let fd = tempURL.path.withCString { open($0, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0o600) }
     guard fd >= 0 else { throw POSIXIOError(errnoValue: errno) }
 
     var writeErrno: Int32?

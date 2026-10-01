@@ -1,4 +1,5 @@
 import Foundation
+import os
 
 /// `nowplaying.json` 的完整内容（T-010 §3）。
 public struct NowPlayingSnapshot: Codable, Equatable, Sendable {
@@ -32,6 +33,10 @@ public struct NowPlayingSnapshot: Codable, Equatable, Sendable {
 public struct NowPlayingStore: Sendable {
     private let fileURL: URL
 
+    /// F-21（安全审计 SEC-03，T-003 §5 日志脱敏）：只记文件名和 errno，
+    /// 不记歌单名、曲目路径。
+    private static let logger = Logger(subsystem: "com.local.macmusicplayer", category: "NowPlaying")
+
     public init(fileURL: URL = DataFolder.nowPlaying) {
         self.fileURL = fileURL
     }
@@ -61,6 +66,7 @@ public struct NowPlayingStore: Sendable {
         } catch {
             // 目录不存在且创建失败（例如上级目录只读）；目录已存在但被设为只读的情况
             // 在下面写临时文件时通过 errno 精确映射。
+            Self.logger.notice("save failed: ensureExists file=\(fileURL.lastPathComponent, privacy: .public)")
             return "数据文件夹没有写入权限"
         }
 
@@ -68,6 +74,7 @@ public struct NowPlayingStore: Sendable {
         do {
             data = try SonglistCoding.makeEncoder().encode(snapshot)
         } catch {
+            Self.logger.notice("save failed: encode file=\(fileURL.lastPathComponent, privacy: .public)")
             return "写入失败（数据编码错误）"
         }
 
@@ -78,8 +85,12 @@ public struct NowPlayingStore: Sendable {
             try writeAtomically(data, tempURL: tempURL, finalURL: fileURL, beforeRename: nil)
             return nil
         } catch let error as POSIXIOError {
+            Self.logger.notice(
+                "save failed: write file=\(fileURL.lastPathComponent, privacy: .public) errno=\(error.errnoValue, privacy: .public)"
+            )
             return error.reason
         } catch {
+            Self.logger.notice("save failed: write file=\(fileURL.lastPathComponent, privacy: .public)")
             return "写入失败"
         }
     }

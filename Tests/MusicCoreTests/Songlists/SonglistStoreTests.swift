@@ -368,6 +368,55 @@ final class SonglistStoreTests: XCTestCase {
         await XCTAssertThrowsErrorAsync(try await store.remove(fileName: "abc.json"))
         XCTAssertTrue(FileManager.default.fileExists(atPath: insideBadName.path), "文件名不合法时不应删除")
     }
+
+    // MARK: - #11（F-19，安全审计 SEC-01）临时文件路径预先放了符号链接
+
+    func testWriteAtomicallyCleansUpPreplacedSymlinkAtTempPath() async throws {
+        let store = SonglistStore(root: root)
+        _ = await store.loadAll()
+
+        let targetID = UUID()
+        let fileName = "\(targetID.uuidString.lowercased()).json"
+        let tempFileName = "\(fileName).tmp-\(ProcessInfo.processInfo.processIdentifier)"
+        try FileManager.default.createDirectory(at: songlistsDir(), withIntermediateDirectories: true)
+
+        // 目录外的一个「受害」文件，内容不应该被覆盖。
+        let victimFile = root.appendingPathComponent("victim.txt")
+        try Data("原始内容".utf8).write(to: victimFile)
+
+        // 预先在临时文件应该出现的位置放一个指向目录外文件的符号链接。
+        let tempURL = songlistsDir().appendingPathComponent(tempFileName)
+        try FileManager.default.createSymbolicLink(at: tempURL, withDestinationURL: victimFile)
+
+        let outcome = await store.commit(CreateSonglistOperation(id: targetID, name: "符号链接攻击"))
+
+        guard case .success = outcome.result else {
+            return XCTFail("先 unlink 清场之后应该能正常写入：\(outcome.result)")
+        }
+        let victimContent = try String(contentsOf: victimFile, encoding: .utf8)
+        XCTAssertEqual(victimContent, "原始内容", "符号链接指向的目录外文件不应该被写入")
+    }
+
+    // MARK: - #12（F-20，安全审计 SEC-02）文件名大小写混淆
+
+    func testLoadAllTreatsUppercaseFileNameAsLoadFailure() async throws {
+        try FileManager.default.createDirectory(at: songlistsDir(), withIntermediateDirectories: true)
+
+        let id = UUID()
+        let lowerName = "\(id.uuidString.lowercased()).json"
+        let upperName = "\(id.uuidString).json" // uuidString 本身就是大写的
+
+        let songlist = Songlist(id: id, name: "小写版", createdAt: Date(), entries: [])
+        let data = try SonglistCoding.makeEncoder().encode(songlist)
+        try data.write(to: songlistsDir().appendingPathComponent(lowerName))
+        try data.write(to: songlistsDir().appendingPathComponent(upperName))
+
+        let store = SonglistStore(root: root)
+        let snapshot = await store.loadAll()
+
+        XCTAssertEqual(snapshot.songlists[id]?.name, "小写版", "全小写的那个应该正常加载")
+        XCTAssertTrue(snapshot.failures.contains { $0.fileName == upperName }, "大写的那个应该进入 loadFailures")
+    }
 }
 
 /// `XCTAssertThrowsError` 没有 async 版本，手写一个方便在 actor 方法上使用。
