@@ -307,4 +307,98 @@ final class PlaybackQueueTests: XCTestCase {
         q.mode = .repeatAll
         XCTAssertEqual(q.next(auto: false), 4)
     }
+
+    // MARK: - realign（T-001：跟随状态下重新对齐当前曲目）
+
+    func testRealignActsLikeSelect() {
+        var q = PlaybackQueue(count: 5, mode: .sequential)
+        q.realign(2)
+        XCTAssertEqual(q.current, 2)
+        XCTAssertEqual(q.next(auto: true), 3)
+    }
+
+    func testRealignOutOfRangeIsIgnored() {
+        var q = PlaybackQueue(count: 3, mode: .sequential)
+        q.realign(99)
+        XCTAssertNil(q.current)
+    }
+
+    func testRealignClearsExistingPark() {
+        var q = PlaybackQueue(count: 10, mode: .sequential)
+        q.park(at: 7)
+
+        q.realign(2)
+
+        XCTAssertEqual(q.current, 2)
+        XCTAssertEqual(q.next(auto: true), 3, "重新对齐后旧的停靠点应失效")
+    }
+
+    // MARK: - pendingResumeItemIndex（T-008：统一给编辑操作一个续播点的只读入口）
+
+    func testPendingResumeItemIndexIsNilWithoutParkOrResumePoint() {
+        let q = PlaybackQueue(count: 5, mode: .sequential)
+        XCTAssertNil(q.pendingResumeItemIndex)
+    }
+
+    func testPendingResumeItemIndexReflectsParkedIndexWhenNoResumeAt() {
+        var q = PlaybackQueue(count: 10, mode: .sequential)
+        q.park(at: 5)
+        XCTAssertEqual(q.pendingResumeItemIndex, 5, "跟随状态下停靠着时，也应能作为编辑操作的续播点")
+    }
+
+    func testPendingResumeItemIndexClampsParkedIndexBeyondCount() {
+        var q = PlaybackQueue(count: 3, mode: .sequential)
+        q.park(at: 99)
+        XCTAssertEqual(q.pendingResumeItemIndex, 3, "越界的停靠点等同于「接在末尾」，即 count")
+    }
+
+    // MARK: - peekNextWhere（T-007 #7：跳过不满足条件的候选项，无副作用）
+
+    func testPeekNextWhereSkipsUnavailableMiddleTrack() {
+        var q = PlaybackQueue(count: 3, mode: .sequential)
+        q.select(0)
+        // 下标 1 不满足条件（模拟「不可用」），应该跳过它找到 2。
+        let result = q.peekNextWhere({ $0 != 1 }, auto: true)
+        XCTAssertEqual(result, 2)
+    }
+
+    func testPeekNextWhereHasNoSideEffects() {
+        var q = PlaybackQueue(count: 3, mode: .sequential)
+        q.select(0)
+        _ = q.peekNextWhere({ $0 != 1 }, auto: true)
+        XCTAssertEqual(q.current, 0, "peekNextWhere 不应该改变 current")
+        XCTAssertEqual(q.next(auto: true), 1, "顺序表本身也不应该被打乱")
+    }
+
+    func testPeekNextWhereReturnsNilWhenNoneSatisfy() {
+        var q = PlaybackQueue(count: 3, mode: .sequential)
+        q.select(0)
+        XCTAssertNil(q.peekNextWhere({ _ in false }, auto: true))
+    }
+
+    func testPeekNextWhereWrapsInRepeatAllMode() {
+        var q = PlaybackQueue(count: 3, mode: .repeatAll)
+        q.select(2)
+        // 顺序播放到底，允许绕回表头去找满足条件的下标。
+        let result = q.peekNextWhere({ $0 == 0 }, auto: true)
+        XCTAssertEqual(result, 0)
+    }
+
+    func testPeekNextWhereDoesNotWrapInSequentialMode() {
+        var q = PlaybackQueue(count: 3, mode: .sequential)
+        q.select(2)
+        XCTAssertNil(q.peekNextWhere({ _ in true }, auto: true), "顺序播放到表尾不应该绕回表头")
+    }
+
+    func testPeekNextWhereStaysOnCurrentForAutoRepeatOneWhenSatisfied() {
+        var q = PlaybackQueue(count: 3, mode: .repeatOne)
+        q.select(1)
+        XCTAssertEqual(q.peekNextWhere({ _ in true }, auto: true), 1, "单曲循环、自然播完时应该重播当前曲")
+    }
+
+    func testPeekNextWhereReturnsNilForAutoRepeatOneWhenCurrentUnsatisfied() {
+        var q = PlaybackQueue(count: 3, mode: .repeatOne)
+        q.select(1)
+        XCTAssertNil(q.peekNextWhere({ $0 != 1 }, auto: true), "单曲循环下 auto 只看当前曲目本身，不该跳去别的")
+    }
 }

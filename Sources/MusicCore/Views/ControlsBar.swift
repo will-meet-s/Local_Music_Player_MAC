@@ -3,6 +3,10 @@ import SwiftUI
 /// 底部传输控制条：上一首 / 播放暂停 / 停止 / 下一首 / 进度 / 播放模式 / 音量。
 struct ControlsBar: View {
     @EnvironmentObject private var vm: PlayerViewModel
+    /// T-019 v2：播放列表抽屉是否开着；动画和打点都集中在 `ContentView.setNowPlaying`
+    /// 里处理，这里只负责外观和转发点击。
+    let isNowPlayingOpen: Bool
+    let onToggleNowPlaying: () -> Void
 
     /// 拖动进度条期间用本地值，避免播放进度回调把滑块拽回去。
     @State private var seekValue: Double = 0
@@ -85,6 +89,15 @@ struct ControlsBar: View {
                 }
                 .buttonStyle(.plain)
                 .help(vm.playMode.displayName)
+
+                // T-019：播放列表抽屉开关（FR-030 ①②）。
+                Button(action: onToggleNowPlaying) {
+                    Image(systemName: "list.bullet")
+                        .frame(width: 22)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(isNowPlayingOpen ? Color.accentColor : Color.secondary)
+                .help(isNowPlayingOpen ? "隐藏播放列表" : "显示播放列表")
 
                 Spacer()
 

@@ -8,13 +8,21 @@ import MusicCore
 struct MacMusicPlayerApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @StateObject private var viewModel = PlayerViewModel()
+    @StateObject private var songlists = SonglistService()
 
     var body: some Scene {
         WindowGroup("音乐播放器", id: PlayerWindow.mainID) {
             ContentView()
                 .environmentObject(viewModel)
+                .environmentObject(songlists)
+                .environmentObject(viewModel.availability)
                 .frame(minWidth: 880, minHeight: 560)
         }
+        // T-018 v2（F-23）：让 SwiftUI 自己记录的窗口样式就是「透明标题栏 + 内容铺满」，
+        // 这样它在窗口重新获得焦点、退出全屏时按自己记录的样式重设窗口也不会变回系统默认
+        // 的标题栏。标题栏本身还在，只是透明、没有标题文字——三个按钮、拖动、双击缩放
+        // 都保留（方案 v2 §1.1 对 v1 误判的更正）。
+        .windowStyle(.hiddenTitleBar)
         .windowResizability(.contentMinSize)
         .commands {
             // 这不是文档型应用，去掉「新建」菜单项

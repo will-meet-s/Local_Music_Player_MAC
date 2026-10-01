@@ -7,6 +7,8 @@ public struct Track: Identifiable, Hashable {
     public var id: URL { url }
 
     public let url: URL
+    /// 「同一首歌」的判定键，初始化时算一次（FR-026）。
+    public let identity: TrackIdentity
     public var title: String
     public var artist: String?
     public var album: String?
@@ -24,6 +26,7 @@ public struct Track: Identifiable, Hashable {
 
     public init(url: URL) {
         self.url = url
+        self.identity = TrackIdentity(url: url)
         self.title = url.deletingPathExtension().lastPathComponent
         self.artist = nil
         self.album = nil

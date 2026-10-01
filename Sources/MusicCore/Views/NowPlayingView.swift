@@ -106,13 +106,17 @@ private struct TrackTitleView: View {
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                 }
+                AddCurrentTrackToSonglistButton(track: track)
             }
             .frame(maxWidth: .infinity)
         } else {
             VStack(spacing: 4) {
-                Text(track?.title ?? "未在播放")
-                    .font(.title3.weight(.semibold))
-                    .lineLimit(1)
+                HStack(spacing: 6) {
+                    Text(track?.title ?? "未在播放")
+                        .font(.title3.weight(.semibold))
+                        .lineLimit(1)
+                    AddCurrentTrackToSonglistButton(track: track)
+                }
                 if let subtitle = track?.subtitle, !subtitle.isEmpty {
                     Text(subtitle)
                         .font(.callout)
@@ -121,6 +125,21 @@ private struct TrackTitleView: View {
                 }
             }
         }
+    }
+}
+
+/// T-004 §2.5：右侧「正在播放」区的"添加到歌单"入口，对象恒为当前这一首。
+private struct AddCurrentTrackToSonglistButton: View {
+    let track: Track?
+
+    var body: some View {
+        AddToSonglistMenu(tracks: { track.map { [$0] } ?? [] }, excluding: nil) {
+            Image(systemName: "text.badge.plus")
+        }
+        .menuStyle(.borderlessButton)
+        .frame(width: 20)
+        .help("添加到歌单")
+        .disabled(track == nil)
     }
 }
 

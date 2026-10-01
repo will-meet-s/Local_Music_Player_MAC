@@ -195,3 +195,60 @@ final class TrackFilterTests: XCTestCase {
         XCTAssertTrue(TrackFilter.apply(to: [], search: "x", sort: .title, ascending: true).isEmpty)
     }
 }
+
+// MARK: - 歌单内搜索（T-012）
+//
+// T-012 直接复用 TrackFilter.filtered（只过滤、不排序），不改基线代码；这里按
+// 方案 §7 的固定歌单「全」把验收场景过一遍，确认复用的规则和曲库搜索完全一致。
+
+final class SonglistSearchFilterTests: XCTestCase {
+
+    private func track(path: String, title: String, artist: String? = nil, album: String? = nil) -> Track {
+        var t = Track(url: URL(fileURLWithPath: path))
+        t.title = title
+        t.artist = artist
+        t.album = album
+        return t
+    }
+
+    /// 歌单「全」= [C08, B05, A03, A02, P10, C07]。
+    private var all: [Track] {
+        [
+            track(path: "/m/c08.mp3", title: "C08", artist: "Adele", album: "25"),
+            track(path: "/m/b05.mp3", title: "B05", artist: "王菲"),
+            track(path: "/m/a03.mp3", title: "A03"),
+            track(path: "/m/a02.mp3", title: "A02"),
+            track(path: "/m/p10.mp3", title: "Café"),
+            track(path: "/m/c07.mp3", title: "C07", artist: "Adele", album: "25")
+        ]
+    }
+
+    // #1
+    func testSearchByTitlePrefixAndArtistAndAlbum() {
+        XCTAssertEqual(TrackFilter.filtered(all, search: "A0").map(\.title), ["A03", "A02"])
+        XCTAssertEqual(TrackFilter.filtered(all, search: "王菲").map(\.title), ["B05"])
+        XCTAssertEqual(TrackFilter.filtered(all, search: "25").map(\.title), ["C08", "C07"], "按专辑名匹配，保持歌单里的原顺序")
+    }
+
+    // #2
+    func testSearchByArtistIsCaseInsensitive() {
+        XCTAssertEqual(TrackFilter.filtered(all, search: "adele").map(\.title), ["C08", "C07"])
+        XCTAssertEqual(TrackFilter.filtered(all, search: "ADELE").map(\.title), ["C08", "C07"])
+    }
+
+    // #3
+    func testSearchIsDiacriticInsensitiveForCafe() {
+        XCTAssertEqual(TrackFilter.filtered(all, search: "cafe").map(\.title), ["Café"])
+        XCTAssertEqual(TrackFilter.filtered(all, search: "CAFÉ").map(\.title), ["Café"])
+    }
+
+    // #4
+    func testTwoSpacesReturnsEntireSonglistInOriginalOrder() {
+        XCTAssertEqual(TrackFilter.filtered(all, search: "  ").map(\.title), ["C08", "B05", "A03", "A02", "Café", "C07"])
+    }
+
+    // #5
+    func testSearchWithNoMatchesReturnsEmpty() {
+        XCTAssertTrue(TrackFilter.filtered(all, search: "不存在xyz").isEmpty)
+    }
+}

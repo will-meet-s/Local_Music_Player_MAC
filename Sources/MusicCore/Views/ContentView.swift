@@ -2,8 +2,19 @@ import SwiftUI
 
 public struct ContentView: View {
     @EnvironmentObject private var vm: PlayerViewModel
+    @EnvironmentObject private var songlists: SonglistService
+    /// T-019：播放列表抽屉的开关，多个窗口共用（FR-030 ⑨）。初值直接来自
+    /// `@AppStorage`、用于首次渲染——启动恢复时不播放滑入动画（方案 §7 易踩的坑）。
+    @AppStorage("nowPlayingPanelOpen") private var showNowPlaying = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     public init() {}
+
+    /// T-019 v2：动画和 `nowplaying.open` 打点都集中在这一处（方案 §2）。
+    private func setNowPlaying(open: Bool) {
+        if open && !showNowPlaying { PerfTrace.begin("nowplaying.open") }
+        withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.25)) { showNowPlaying = open }
+    }
 
     public var body: some View {
         VStack(spacing: 0) {
@@ -15,20 +26,84 @@ public struct ContentView: View {
                 Divider()
             }
 
+            // T-004：SonglistService 的错误（saveFailed 等）和 vm.errorMessage 一样显示。
+            if let message = songlists.errorMessage {
+                ErrorBanner(message: message) { songlists.errorMessage = nil }
+                Divider()
+            }
+
+            if let notice = vm.notice {
+                NoticeBanner(message: notice)
+                Divider()
+            }
+
+            // T-019 v2：HSplitView 恢复成基线的两栏，抽屉改成「正在播放」区上的
+            // overlay，不参与布局——两栏宽度都不变，收起后和打开前完全一样（FR-030 ④）。
             HSplitView {
-                TrackListView()
+                LeftPaneView()
                     .frame(minWidth: 260, idealWidth: 320, maxWidth: 460)
                 NowPlayingView()
                     .frame(minWidth: 360, maxWidth: .infinity)
+                    .overlay(alignment: .trailing) {
+                        if showNowPlaying {
+                            NowPlayingDrawer(onClose: { setNowPlaying(open: false) })
+                                .transition(reduceMotion ? .identity : .move(edge: .trailing))
+                        }
+                    }
+                    // .clipped() 加在 NowPlayingView 上（overlay 之后），不能加在抽屉
+                    // 自己身上，否则滑动时抽屉还是会画出「正在播放」区的范围（方案 §7）。
+                    .clipped()
             }
             .frame(maxHeight: .infinity)
 
             Divider()
-            ControlsBar()
+            ControlsBar(
+                isNowPlayingOpen: showNowPlaying,
+                onToggleNowPlaying: { setNowPlaying(open: !showNowPlaying) }
+            )
         }
         .frostedBackground(opacity: vm.backgroundOpacity)
         .task {
+            // T-010：必须在 restoreLastSession() 之前完成，否则扫描后的第一次
+            // 同步会错过 pendingFollowCurrent。
+            await vm.restoreNowPlaying()
             vm.restoreLastSession()
+            songlists.playerViewModel = vm
+            await songlists.loadAll()
+            // T-007 §2.3：程序启动，歌单加载完之后——PL 的 items 用 high，
+            // 全部歌单的全部曲目按 identity 去重后用 low。
+            vm.checkAvailabilityHigh(vm.nowPlaying.items)
+            vm.checkAvailabilityLow(songlists.allTracksAcrossSonglists())
+        }
+        // T-009 §2：刷新曲库完成后，当前打开的歌单（如果有）额外用 high 优先级复查
+        // 一遍——它的曲目不是新曲库的一部分，不会被 performScan 的全量标可用覆盖到。
+        .onChange(of: vm.isScanning) { _, isScanning in
+            guard !isScanning, let openedID = songlists.openedID,
+                  let entries = songlists.entries(of: openedID) else { return }
+            vm.checkAvailabilityHigh(entries.map { songlists.resolve($0) })
+        }
+        // F-12：四个「添加到歌单」入口共用这一个 sheet；菜单项自己不再各挂一个 .sheet。
+        // F-13：直接用 $songlists.pendingCreate 的 Binding，不要在 get 里现造包装值——
+        // 那样每次重绘都会是新 UUID，sheet 会被判定成换了一个，反复关闭重开。
+        // T-011：同一个 sheet 也接「播放列表存为歌单」，标题和成功提示按 origin 区分。
+        .sheet(item: $songlists.pendingCreate) { pending in
+            SonglistNameSheet(
+                title: pending.origin == .saveNowPlaying ? "播放列表存为歌单" : "新建歌单",
+                existing: songlists.summaries.map { ($0.id, $0.name) },
+                excluding: nil
+            ) { name in
+                let result = await songlists.create(name: name, with: pending.tracks)
+                switch result {
+                case .success(let addResult):
+                    let text = pending.origin == .saveNowPlaying
+                        ? "已将播放列表存为歌单「\(addResult.songlistName)」（\(addResult.added) 首）"
+                        : addResult.noticeText
+                    vm.showNotice(text)
+                    return nil
+                case .failure(let error):
+                    return error
+                }
+            }
         }
     }
 }
@@ -194,5 +269,24 @@ private struct ErrorBanner: View {
         .padding(.horizontal, 16)
         .padding(.vertical, 8)
         .background(Color.orange.opacity(0.12))
+    }
+}
+
+/// 提示性文字（T-008）：3 秒后由 ViewModel 自动置 nil，这里不需要手动关闭按钮。
+private struct NoticeBanner: View {
+    let message: String
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "info.circle.fill")
+                .foregroundStyle(Color.accentColor)
+            Text(message)
+                .font(.callout)
+                .lineLimit(2)
+            Spacer()
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 8)
+        .background(Color.accentColor.opacity(0.12))
     }
 }
