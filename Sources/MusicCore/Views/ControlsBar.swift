@@ -3,6 +3,8 @@ import SwiftUI
 /// 底部传输控制条：上一首 / 播放暂停 / 停止 / 下一首 / 进度 / 播放模式 / 音量。
 struct ControlsBar: View {
     @EnvironmentObject private var vm: PlayerViewModel
+    /// T-019：播放列表面板的开关。
+    @Binding var showNowPlaying: Bool
 
     /// 拖动进度条期间用本地值，避免播放进度回调把滑块拽回去。
     @State private var seekValue: Double = 0
@@ -85,6 +87,18 @@ struct ControlsBar: View {
                 }
                 .buttonStyle(.plain)
                 .help(vm.playMode.displayName)
+
+                // T-019：播放列表面板开关（FR-030 ①②）。
+                Button {
+                    if !showNowPlaying { PerfTrace.begin("nowplaying.open") }
+                    showNowPlaying.toggle()
+                } label: {
+                    Image(systemName: "list.bullet")
+                        .frame(width: 22)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(showNowPlaying ? Color.accentColor : Color.secondary)
+                .help(showNowPlaying ? "隐藏播放列表" : "显示播放列表")
 
                 Spacer()
 

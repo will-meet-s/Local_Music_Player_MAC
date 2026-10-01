@@ -3,6 +3,8 @@ import SwiftUI
 public struct ContentView: View {
     @EnvironmentObject private var vm: PlayerViewModel
     @EnvironmentObject private var songlists: SonglistService
+    /// T-019：播放列表面板的开关，多个窗口共用（FR-030 ⑥）。
+    @AppStorage("nowPlayingPanelOpen") private var showNowPlaying = false
 
     public init() {}
 
@@ -31,12 +33,19 @@ public struct ContentView: View {
                 LeftPaneView()
                     .frame(minWidth: 260, idealWidth: 320, maxWidth: 460)
                 NowPlayingView()
-                    .frame(minWidth: 360, maxWidth: .infinity)
+                    .frame(minWidth: showNowPlaying ? 320 : 360, maxWidth: .infinity)
+                // T-019：开关开着时在最右边多出第三栏；必须放在 HSplitView 的最后一个
+                // 子视图位置——放前面的话，前面两栏的身份会变，曲库列表会重建，
+                // 滚动位置就丢了（方案 §7 易踩的坑）。
+                if showNowPlaying {
+                    NowPlayingListView()
+                        .frame(minWidth: 260, idealWidth: 300, maxWidth: 420)
+                }
             }
             .frame(maxHeight: .infinity)
 
             Divider()
-            ControlsBar()
+            ControlsBar(showNowPlaying: $showNowPlaying)
         }
         .frostedBackground(opacity: vm.backgroundOpacity)
         .task {
